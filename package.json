@@ -1,0 +1,25 @@
+{
+  "name": "horizon-remade",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Open-world festival racing game for the web (Forza Horizon-inspired fan remake)",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "preview": "npm run build && npm start"
+  },
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
+  "dependencies": {
+    "@fontsource/barlow": "^5.3.0",
+    "@fontsource/barlow-condensed": "^5.3.0",
+    "three": "^0.186.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.1"
+  }
+}

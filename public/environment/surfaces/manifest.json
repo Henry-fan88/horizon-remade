@@ -1,0 +1,143 @@
+{
+  "license": "CC0-1.0",
+  "licenseURL": "https://polyhaven.com/license",
+  "retrieved": "2026-09-28",
+  "assets": [
+    {
+      "id": "aerial_grass_rock",
+      "role": "grass",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/aerial_grass_rock",
+      "api": "https://api.polyhaven.com/files/aerial_grass_rock",
+      "sourceTileMeters": 15,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "aerial_grass_rock_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/aerial_grass_rock/aerial_grass_rock_diff_1k.jpg",
+          "sourceMD5": "e920ce36afd0abff000b8366d3d768d3",
+          "sha256": "378839c54a3d0f8c48e50dca4abcad7a03d6c8ad4c90ecc001567fff4b2e89bb",
+          "bytes": 607297
+        },
+        {
+          "map": "nor_gl",
+          "file": "aerial_grass_rock_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/aerial_grass_rock/aerial_grass_rock_nor_gl_1k.jpg",
+          "sourceMD5": "c8aa4c4f09b113cc7edef89ddeaccad9",
+          "sha256": "a9bb566f04b5b19d23facdc9c0937ab12cae15ac9cb1faf5aed5ce1d9e42e747",
+          "bytes": 918085
+        },
+        {
+          "map": "Rough",
+          "file": "aerial_grass_rock_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/aerial_grass_rock/aerial_grass_rock_rough_1k.jpg",
+          "sourceMD5": "f78c5cdc565f990299ae7c5a81f68cf7",
+          "sha256": "8fe5be0d8f9f8de797e57e87903966aa829f25771c9827dc17f841ccddf80f0c",
+          "bytes": 314144
+        }
+      ]
+    },
+    {
+      "id": "dirt",
+      "role": "dirt",
+      "author": "Charlotte Baglioni",
+      "source": "https://polyhaven.com/a/dirt",
+      "api": "https://api.polyhaven.com/files/dirt",
+      "sourceTileMeters": 2,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "dirt_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_diff_1k.jpg",
+          "sourceMD5": "cb37e24797597b1dd1ae3819fa80f076",
+          "sha256": "1e80128afeba25d94bf38137366aece2ade3dd4777ebb9f5ced9eaeafe8765de",
+          "bytes": 319003
+        },
+        {
+          "map": "nor_gl",
+          "file": "dirt_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_nor_gl_1k.jpg",
+          "sourceMD5": "362610edf09fd31735958eecec823a84",
+          "sha256": "e790eea9fce35cfefec1fb22b8087be89c131ffa7dfcd4317de0ca03cb76fe9c",
+          "bytes": 644927
+        },
+        {
+          "map": "Rough",
+          "file": "dirt_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_rough_1k.jpg",
+          "sourceMD5": "d936d6760ce0f899b131d30626d52ce9",
+          "sha256": "fb89aa04bbfe5b8f1cc95749af6c2b4b5ef21a1a7188c59755f4ac6ac0ddd63b",
+          "bytes": 80313
+        }
+      ]
+    },
+    {
+      "id": "rock_face",
+      "role": "rock",
+      "author": "Dario Barresi (processing), Greg Zaal (photography)",
+      "source": "https://polyhaven.com/a/rock_face",
+      "api": "https://api.polyhaven.com/files/rock_face",
+      "sourceTileMeters": 2.4,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "rock_face_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_diff_1k.jpg",
+          "sourceMD5": "220c637db6056b45e7c0a17e6ed8514e",
+          "sha256": "0f3572f6fbda09188fc6f66904b8f46188239be076ec913fca00ac5dbfe06bb5",
+          "bytes": 296388
+        },
+        {
+          "map": "nor_gl",
+          "file": "rock_face_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_nor_gl_1k.jpg",
+          "sourceMD5": "0d244b69a346db78f06c7b76510bb640",
+          "sha256": "05c9e767248501636f937c54cefd11bf440bcf5f4d279e7d63e09ddd14d17f13",
+          "bytes": 607873
+        },
+        {
+          "map": "Rough",
+          "file": "rock_face_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_rough_1k.jpg",
+          "sourceMD5": "9c0ebb95db6ce5ec16abca0899e506a2",
+          "sha256": "33fc249760013dd8316836478b6defa1954e5205cc8070cb467dc230e3926567",
+          "bytes": 56422
+        }
+      ]
+    },
+    {
+      "id": "asphalt_02",
+      "role": "asphalt",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/asphalt_02",
+      "api": "https://api.polyhaven.com/files/asphalt_02",
+      "sourceTileMeters": 3,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "asphalt_02_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_diff_1k.jpg",
+          "sourceMD5": "fa19772d4817754c3efab708c651f5a8",
+          "sha256": "dc10d3eec0f2201dd4591be4e6491c7ebf4fb658492c4f60e1b17c250d3e336f",
+          "bytes": 672582
+        },
+        {
+          "map": "nor_gl",
+          "file": "asphalt_02_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_nor_gl_1k.jpg",
+          "sourceMD5": "338da8de636ea36133170578cac82e8e",
+          "sha256": "1946ab791c221969ad6fba197cf027ae6b18c665d79cd3b114c8bea8c26b067b",
+          "bytes": 1272377
+        },
+        {
+          "map": "Rough",
+          "file": "asphalt_02_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_rough_1k.jpg",
+          "sourceMD5": "ec80a2929797c1b3ffc121c4f665585a",
+          "sha256": "394f1dccee74eaa6c0a63171c8e8e0e27f2f87e060140804bf43c9d548c3a068",
+          "bytes": 484444
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Car model studio · Horizon</title>
+    <style>
+      :root { color-scheme: dark; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #101216; color: #e9edf3; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { width: min(1440px, 100%); padding: 24px; margin: auto; }
+      header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
+      h1 { font-size: 21px; letter-spacing: -.035em; font-weight: 550; margin: 5px 0; }
+      .eyebrow { color: #8994a4; letter-spacing: .14em; text-transform: uppercase; font-size: 10px; }
+      a { color: #b7c6db; font-size: 13px; }
+      #stage { position: relative; width: 100%; aspect-ratio: 16 / 9; border: 1px solid #30343e; border-radius: 14px; overflow: hidden; background: #20252c; }
+      #stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+      #model-label { position: absolute; left: 22px; top: 20px; pointer-events: none; font-size: 13px; font-weight: 550; }
+      #stage-hint { position: absolute; right: 22px; bottom: 18px; pointer-events: none; color: #a7afbd; font-size: 11px; }
+      #load-state { position: absolute; inset: 0; display: grid; place-content: center; color: #e9edf3; padding: 24px; text-align: center; }
+      #load-state[hidden] { display: none; }
+      .controls { display: flex; gap: 14px 26px; flex-wrap: wrap; padding: 20px 2px; align-items: center; }
+      .control-group { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+      .control-title { font-size: 11px; color: #9da7b7; margin-right: 4px; }
+      button { border: 1px solid #383e49; border-radius: 6px; background: #1d222b; padding: 8px 12px; color: #cbd3df; font: inherit; font-size: 12px; cursor: pointer; }
+      button:hover { background: #2c3441; }
+      button[aria-pressed="true"] { color: #fff; background: #3b4554; border-color: #8395ac; }
+      button:focus-visible, input:focus-visible { outline: 2px solid #afcaed; outline-offset: 3px; }
+      .paint { padding: 0; height: 29px; width: 29px; border-radius: 50%; background: var(--paint); border: 2px solid #5b6472; }
+      .paint:hover { background: var(--paint); }
+      .paint[aria-pressed="true"] { background: var(--paint); box-shadow: 0 0 0 2px #101216, 0 0 0 3px #d6deea; }
+      label { font-size: 12px; display: flex; align-items: center; gap: 5px; color: #c5cdda; }
+      input { accent-color: #aac2df; }
+      #steer { width: 112px; }
+      .checks { border-top: 1px solid #30343e; padding-top: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 28px; }
+      h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8994a4; font-weight: 500; margin: 0 0 10px; }
+      #validation { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.85; }
+      #validation li[data-result="pass"] { color: #a3d4b0; }
+      #validation li[data-result="fail"] { color: #f4a1a1; }
+      #renderer-stats, #renderer-log { font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, monospace; color: #abb6c7; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+      #renderer-log { margin-top: 6px; max-height: 120px; overflow: auto; color: #efb8a3; }
+      .note { margin: 14px 0 0; font-size: 11px; color: #778294; line-height: 1.6; }
+      @media (max-width: 650px) { main { padding: 14px; } #model-label { left: 12px; top: 12px; font-size: 11px; } #stage-hint { right: 12px; bottom: 12px; font-size: 9px; } .checks { grid-template-columns: 1fr; } .controls { gap: 15px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><div><span class="eyebrow">Horizon · model development</span><h1>Car model studio</h1></div><a href="../?car=gt">Back to the game ↗</a></header>
+      <section id="stage" aria-label="Interactive car model preview">
+        <div id="model-label">Loading car…</div>
+        <div id="stage-hint">Drag to orbit · scroll to inspect</div>
+        <div id="load-state" role="status">Loading the game’s car model…</div>
+      </section>
+      <div class="controls">
+        <div class="control-group" aria-label="Camera views"><span class="control-title">VIEW</span><button data-view="hero" aria-pressed="true">¾</button><button data-view="front" aria-pressed="false">Front</button><button data-view="rear" aria-pressed="false">Rear</button><button data-view="side" aria-pressed="false">Side</button></div>
+        <div class="control-group" aria-label="Paint presets"><span class="control-title">PAINT</span><button class="paint" data-paint="#c81d25" style="--paint:#c81d25" aria-label="Rosso red" aria-pressed="true"></button><button class="paint" data-paint="#e8e9e8" style="--paint:#e8e9e8" aria-label="Pearl white" aria-pressed="false"></button><button class="paint" data-paint="#e6b832" style="--paint:#e6b832" aria-label="Yellow" aria-pressed="false"></button><button class="paint" data-paint="#183d6b" style="--paint:#183d6b" aria-label="Deep blue" aria-pressed="false"></button><button class="paint" data-paint="#20232a" style="--paint:#20232a" aria-label="Graphite" aria-pressed="false"></button></div>
+        <div class="control-group"><label for="steer">Steering <input id="steer" type="range" min="-32" max="32" value="0" /></label><button id="straight" title="Reset steering angle">Reset</button><label><input id="motion" type="checkbox" /> Roll wheels</label></div>
+        <div class="control-group"><label><input id="brake" type="checkbox" /> Brake</label><label><input id="night" type="checkbox" /> Night lamps</label><label><input id="reverse" type="checkbox" /> Reverse</label></div>
+      </div>
+      <section class="checks" aria-label="Model contract validation"><div><h2>Model checks</h2><ul id="validation" data-status="loading" aria-live="polite"><li>Waiting for model preload…</li></ul></div><div><h2>Renderer</h2><pre id="renderer-stats">Starting WebGL…</pre><pre id="renderer-log" aria-live="polite"></pre></div></section>
+      <p class="note">The same car model used in the game, shown with studio lighting. Original Ferrari 458 Italia model by <a href="https://sketchfab.com/3d-models/ferrari-458-italia-57bf6cc56931426e87494f554df1dab6" target="_blank" rel="noreferrer">vicent091036</a>, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Adapted for game paint, lighting and wheel animation.</p>
+    </main>
+    <script type="module">
+      import * as THREE from 'three';
+      import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+      import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+      import { buildCar } from '/src/vehicle/carmodel.js';
+      import { preloadRealCar } from '/src/vehicle/realcar.js';
+      import { CAR_BY_ID } from '/src/vehicle/carspecs.js';
+
+      const stage = document.querySelector('#stage');
+      const validation = document.querySelector('#validation');
+      const loadState = document.querySelector('#load-state');
+      const rendererLog = document.querySelector('#renderer-log');
+      const checks = [];
+      const messages = [];
+      let renderer, controls, model, floor, scene, camera, environment;
+      let disposed = false, frames = 0, lastStats = 0, lastFrame = 0, wheelAngle = 0;
+      let materialDisposals = 0, geometryDisposals = 0;
+      const mark = (label, ok, detail = '') => {
+        checks.push({ label, ok, detail });
+        const li = document.createElement('li');
+        li.dataset.result = ok ? 'pass' : 'fail';
+        li.textContent = `${ok ? '✓' : '✗'} ${label}${detail ? ' · ' + detail : ''}`;
+        validation.appendChild(li);
+      };
+      const log = (level, message) => {
+        messages.push(`${level}: ${message}`);
+        rendererLog.textContent = messages.slice(-8).join('\n');
+        rendererLog.dataset.count = String(messages.length);
+      };
+      for (const method of ['warn', 'error']) {
+        const original = console[method].bind(console);
+        console[method] = (...args) => { original(...args); log(method, args.map(a => a instanceof Error ? a.message : String(a)).join(' ')); };
+      }
+      window.addEventListener('error', event => log('error', event.message));
+      window.addEventListener('unhandledrejection', event => log('error', String(event.reason)));
+      const finishChecks = () => {
+        validation.dataset.status = checks.every(c => c.ok) ? 'passed' : 'failed';
+        validation.dataset.passed = String(checks.filter(c => c.ok).length);
+        validation.dataset.failed = String(checks.filter(c => !c.ok).length);
+      };
+      const materialSet = car => {
+        const materials = new Set();
+        car.group.traverse(o => { if (o.isMesh) for (const mat of Array.isArray(o.material) ? o.material : [o.material]) materials.add(mat); });
+        return materials;
+      };
+      const geometrySet = car => {
+        const geometries = new Set();
+        car.group.traverse(o => { if (o.isMesh) geometries.add(o.geometry); });
+        return geometries;
+      };
+      const cameraViews = { hero: [1, .32, 1.2], front: [0, .12, 1], rear: [0, .15, -1], side: [1, .12, 0] };
+      let currentView = 'hero';
+      const fitCamera = view => {
+        if (!model) return;
+        currentView = view;
+        const box = new THREE.Box3().setFromObject(model.group);
+        const center = box.getCenter(new THREE.Vector3());
+        center.y = Math.max(.6, center.y);
+        const direction = new THREE.Vector3(...cameraViews[view]).normalize();
+        const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), direction).normalize();
+        const up = new THREE.Vector3().crossVectors(direction, right).normalize();
+        const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+        let distance = 0;
+        for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+          const offset = new THREE.Vector3(x, y, z).sub(center);
+          const depth = offset.dot(direction);
+          distance = Math.max(distance, depth + Math.abs(offset.dot(up)) / (tan * .78), depth + Math.abs(offset.dot(right)) / (tan * camera.aspect * .8));
+        }
+        camera.position.copy(center).addScaledVector(direction, Math.max(distance, 4));
+        controls.target.copy(center);
+        controls.update();
+        document.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.view === view)));
+      };
+
+      try {
+        renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = .95;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFShadowMap;
+        renderer.domElement.setAttribute('aria-label', 'Car in a lit studio; drag to rotate view');
+        stage.prepend(renderer.domElement);
+        renderer.domElement.addEventListener('webglcontextlost', () => { log('error', 'WebGL context lost'); validation.dataset.status = 'failed'; });
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x22272e);
+        scene.fog = new THREE.Fog(0x22272e, 18, 45);
+        camera = new THREE.PerspectiveCamera(32, 16 / 9, .05, 100);
+        const pmrem = new THREE.PMREMGenerator(renderer);
+        const room = new RoomEnvironment();
+        environment = pmrem.fromScene(room, .04);
+        scene.environment = environment.texture;
+        scene.environmentIntensity = .85;
+        room.dispose();
+        pmrem.dispose();
+        scene.add(new THREE.HemisphereLight(0xe7f0ff, 0x292724, .65));
+        const key = new THREE.DirectionalLight(0xfff4e7, 2.8);
+        key.position.set(-3, 7, 5);
+        key.castShadow = true;
+        key.shadow.mapSize.set(2048, 2048);
+        Object.assign(key.shadow.camera, { left: -5, right: 5, top: 5, bottom: -5, near: .2, far: 20 });
+        key.shadow.normalBias = .015;
+        key.shadow.bias = -.0001;
+        scene.add(key);
+        const rim = new THREE.DirectionalLight(0xc5d8ff, 1.3);
+        rim.position.set(4, 4, -4);
+        scene.add(rim);
+        floor = new THREE.Mesh(new THREE.PlaneGeometry(200, 200), new THREE.MeshStandardMaterial({ color: 0x22262c, roughness: .66, metalness: .12 }));
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -.006;
+        floor.receiveShadow = true;
+        scene.add(floor);
+        controls = new OrbitControls(camera, renderer.domElement);
+        controls.enableDamping = true;
+        controls.dampingFactor = .08;
+        controls.minDistance = 2;
+        controls.maxDistance = 18;
+        controls.maxPolarAngle = Math.PI / 2 - .02;
+        controls.enablePan = true;
+        const resize = () => {
+          const { width, height } = stage.getBoundingClientRect();
+          renderer.setSize(width, height, false);
+          camera.aspect = width / height;
+          camera.updateProjectionMatrix();
+        };
+        new ResizeObserver(resize).observe(stage);
+        resize();
+        await preloadRealCar();
+        model = buildCar(CAR_BY_ID.gt.style, { color: '#c81d25', finish: 'gloss' });
+        validation.replaceChildren();
+        const imported = model.group.userData.visualAsset === 'ferrari-458';
+        const modelName = model.group.userData.modelName || (imported ? 'Ferrari 458 Italia' : model.group.name || 'Unnamed car model');
+        document.querySelector('#model-label').textContent = modelName;
+        validation.dataset.model = modelName;
+        mark('Imported model loaded', imported, modelName);
+        const st = CAR_BY_ID.gt.style;
+        const expected = [
+          [st.trackF / 2, st.wheelR, st.WB / 2], [-st.trackF / 2, st.wheelR, st.WB / 2],
+          [st.trackR / 2, st.wheelRr ?? st.wheelR, -st.WB / 2], [-st.trackR / 2, st.wheelRr ?? st.wheelR, -st.WB / 2],
+        ];
+        const wheelOK = model.wheels.length === 4 && model.wheels.every((w, index) => {
+          if (!w.steer?.isObject3D || !w.spin?.isObject3D) return false;
+          return [...w.steer.position, w.baseY, w.r].every(Number.isFinite) && w.steer.position.distanceTo(new THREE.Vector3(...expected[index])) < .003 && Math.abs(w.baseY - expected[index][1]) < .003 && Math.abs(w.r - expected[index][1]) < .003;
+        });
+        mark('Four wheels match physics mounts', wheelOK, `wheelbase ${st.WB.toFixed(2)} m`);
+        const bounds = new THREE.Box3().setFromObject(model.group);
+        const size = bounds.getSize(new THREE.Vector3());
+        const boundsOK = [...bounds.min, ...bounds.max].every(Number.isFinite) && size.x > 1 && size.y > .8 && size.z > 3 && size.x < 4 && size.y < 3 && size.z < 7 && bounds.min.y >= -.08 && bounds.min.y <= .08;
+        mark('Finite bounds and tyres at floor', boundsOK, `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)} m; floor ${bounds.min.y.toFixed(3)} m`);
+        mark('Paint and lamp controls available', Boolean(model.paintMat?.color && ['tailMat', 'headMat', 'revMat'].every(k => model.lights?.[k]?.emissive)), 'paint · brake · headlamps · reverse');
+        const primaryMaterials = materialSet(model);
+        const primaryGeometries = geometrySet(model);
+        for (const material of primaryMaterials) material.addEventListener('dispose', () => materialDisposals++);
+        for (const geometry of primaryGeometries) geometry.addEventListener('dispose', () => geometryDisposals++);
+        const second = buildCar(st, { color: '#163b66', finish: 'gloss' });
+        const secondMaterials = materialSet(second);
+        const firstColor = model.paintMat.color.getHex();
+        const firstTailIntensity = model.lights.tailMat.emissiveIntensity;
+        second.paintMat.color.set('#e6b832');
+        second.lights.tailMat.emissiveIntensity = 12;
+        const isolation = second.paintMat !== model.paintMat && [...secondMaterials].every(material => !primaryMaterials.has(material)) && model.paintMat.color.getHex() === firstColor && model.lights.tailMat.emissiveIntensity === firstTailIntensity;
+        second.dispose();
+        second.paintMat.dispose();
+        mark('Instances isolate paint and lamp materials', isolation);
+        mark('Disposing another instance preserves this car', materialDisposals === 0 && geometryDisposals === 0, `${materialDisposals} material / ${geometryDisposals} geometry disposals`);
+        model.group.traverse(o => {
+          if (!o.isMesh) return;
+          const materials = Array.isArray(o.material) ? o.material : [o.material];
+          o.castShadow = materials.every(material => !material.transparent);
+          o.receiveShadow = true;
+        });
+        scene.add(model.group);
+        fitCamera('hero');
+        renderer.render(scene, camera);
+        mark('Car renders after second instance disposal', renderer.info.render.triangles > 1000, `${renderer.info.render.triangles.toLocaleString()} triangles`);
+        finishChecks();
+        loadState.hidden = true;
+
+        document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => fitCamera(button.dataset.view)));
+        document.querySelectorAll('[data-paint]').forEach(button => button.addEventListener('click', () => {
+          model.paintMat.color.set(button.dataset.paint);
+          document.querySelectorAll('[data-paint]').forEach(paint => paint.setAttribute('aria-pressed', String(paint === button)));
+        }));
+        document.querySelector('#straight').addEventListener('click', () => { document.querySelector('#steer').value = '0'; });
+        const steer = document.querySelector('#steer'), motion = document.querySelector('#motion');
+        const brake = document.querySelector('#brake'), night = document.querySelector('#night'), reverse = document.querySelector('#reverse');
+        renderer.setAnimationLoop(now => {
+          if (disposed) return;
+          const dt = lastFrame ? Math.min((now - lastFrame) / 1000, .05) : 0;
+          lastFrame = now;
+          if (motion.checked) wheelAngle -= dt * 2.8;
+          model.wheels.forEach((wheel, index) => { wheel.steer.rotation.y = index < 2 ? THREE.MathUtils.degToRad(-Number(steer.value)) : 0; wheel.spin.rotation.x = wheelAngle; });
+          model.lights.tailMat.emissiveIntensity = (night.checked ? 1.4 : .5) + (brake.checked ? 5.5 : 0);
+          model.lights.headMat.emissiveIntensity = night.checked ? 6 : 1.4;
+          model.lights.revMat.emissiveIntensity = reverse.checked ? 3 : 0;
+          controls.update();
+          renderer.render(scene, camera);
+          frames++;
+          if (now - lastStats > 1000) {
+            const info = renderer.info;
+            document.querySelector('#renderer-stats').textContent = `${Math.round(frames * 1000 / (now - lastStats))} fps · ${info.render.calls} draw calls · ${info.render.triangles.toLocaleString()} triangles\n${info.memory.geometries} geometries · ${info.memory.textures} textures · ${renderer.domElement.width} × ${renderer.domElement.height}\nACES · sRGB · local model and decoder`;
+            frames = 0;
+            lastStats = now;
+          }
+        });
+      } catch (error) {
+        validation.replaceChildren();
+        mark('Car preview startup', false, error.message || String(error));
+        finishChecks();
+        loadState.hidden = false;
+        loadState.textContent = `Unable to load car: ${error.message || error}`;
+        console.error(error);
+      }
+      window.addEventListener('pagehide', () => {
+        disposed = true;
+        renderer?.setAnimationLoop(null);
+        controls?.dispose();
+        model?.dispose();
+        model?.paintMat.dispose();
+        floor?.geometry.dispose();
+        floor?.material.dispose();
+        environment?.dispose();
+        renderer?.dispose();
+      }, { once: true });
+    </script>
+  </body>
+</html>
