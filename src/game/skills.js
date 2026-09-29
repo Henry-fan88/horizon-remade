@@ -120,7 +120,7 @@ export class SkillSystem {
     // ---- air
     const a = this.air;
     if (p.grounded === 0 && p.speed > 8) {
-      if (a.time === 0) a.startPos = p.pos.clone();
+      if (a.time === 0) (a.startPos || (a.startPos = p.pos.clone())).copy(p.pos);
       a.time += dt;
       if (a.time > 0.45) this.live(a.time > 1.6 ? 'GREAT AIR' : 'AIR', Math.round(a.time * 420));
     } else if (a.time > 0) {
@@ -141,7 +141,8 @@ export class SkillSystem {
       }
     } else this.speedTimer = Math.max(0, this.speedTimer - dt * 2);
     // ---- burnout
-    const spin = Math.max(...p.wheels.map((w) => (w.driven ? w.spinning : 0)));
+    let spin = 0;
+    for (const w of p.wheels) if (w.driven && w.spinning > spin) spin = w.spinning;
     if (kmh < 25 && spin > 0.4 && p.input.throttle > 0.8) {
       this.burnTime += dt;
       if (this.burnTime > 1.2) {
@@ -184,6 +185,13 @@ export class SkillSystem {
   state() {
     const c = this.chain;
     const liveBonus = this.drift.active ? this.drift.score : this.air.time > 0.45 ? this.air.time * 420 : 0;
-    return { active: c.active, total: Math.round(c.total + liveBonus), mult: c.mult, timer: clamp(c.timer / BANK_TIME, 0, 1), skillName: c.skillName, skillPts: c.skillPts };
+    const o = this._state || (this._state = {});
+    o.active = c.active;
+    o.total = Math.round(c.total + liveBonus);
+    o.mult = c.mult;
+    o.timer = clamp(c.timer / BANK_TIME, 0, 1);
+    o.skillName = c.skillName;
+    o.skillPts = c.skillPts;
+    return o;
   }
 }

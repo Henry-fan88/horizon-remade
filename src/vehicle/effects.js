@@ -3,7 +3,10 @@
 import * as THREE from 'three';
 import { makeSmokeTexture } from '../world/textures.js';
 import { fogUniforms } from '../world/sky.js';
-import { SURFACE_INFO } from '../world/world.js';
+import { SURFACE_INFO } from '../world/surfaces.js';
+
+const TYRE_SMOKE = [0.86, 0.86, 0.88];
+const DUST_RATE = { dirt: 1, gravel: 1, sand: 1, dry: 0.8, ash: 0.8, field: 0.55, rock: 0.4, verge: 0.4, grass: 0.18, forest: 0.25 };
 
 const MAX_P = 1400;
 
@@ -249,9 +252,9 @@ export class Effects {
       let col = surf.dust;
       if (paved) {
         rate = Math.max(0, slip - 0.45) * 60 * Math.min(1, speed / 6 + w.spinning);
-        col = [0.86, 0.86, 0.88];
+        col = TYRE_SMOKE;
       } else {
-        const k = { dirt: 1, gravel: 1, sand: 1, dry: 0.8, ash: 0.8, field: 0.55, rock: 0.4, verge: 0.4, grass: 0.18, forest: 0.25 }[surf.name] ?? 0.5;
+        const k = DUST_RATE[surf.name] ?? 0.5;
         rate = (Math.min(1, speed / 25) * 12 + slip * 22) * k;
       }
       rate *= intensity;
@@ -291,6 +294,14 @@ export class Effects {
   splash(x, y, z, speed) {
     for (let i = 0; i < 60; i++) {
       this.smoke.spawn(x + (Math.random() - 0.5) * 3, y, z + (Math.random() - 0.5) * 3, (Math.random() - 0.5) * 6, 3 + Math.random() * speed * 0.3, (Math.random() - 0.5) * 6, 1.2, 2.5, 1.5, 0.85, 0.92, 0.95, 0.7, 1.2, -6);
+    }
+  }
+
+  // white water thrown up by a wheel or the hull pushing through water
+  wake(x, y, z, vx, vz, strength = 1) {
+    const n = 1 + Math.floor(Math.random() * 3 * strength);
+    for (let i = 0; i < n; i++) {
+      this.smoke.spawn(x + (Math.random() - 0.5) * 0.6, y + 0.05, z + (Math.random() - 0.5) * 0.6, vx * 0.35 + (Math.random() - 0.5) * 3, 1.2 + Math.random() * 2.5 * strength, vz * 0.35 + (Math.random() - 0.5) * 3, 0.5, 1.6, 0.7 + Math.random() * 0.4, 0.86, 0.92, 0.95, 0.55, 1.4, -7);
     }
   }
 

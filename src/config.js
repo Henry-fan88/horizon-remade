@@ -52,8 +52,11 @@ export const DEFAULT_SETTINGS = {
   camera: 0,
   transmission: 'auto', // auto | manual
   drivingLine: 'race', // off | race | full
-  steeringAssist: true,
+  steeringAssist: 'normal', // off | normal | full
+  stability: true,
+  abs: true,
   tractionControl: true,
+  damage: 'cosmetic', // off | cosmetic | simulation
   masterVolume: 0.8,
   engineVolume: 0.8,
   musicVolume: 0.45,

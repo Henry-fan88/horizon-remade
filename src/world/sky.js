@@ -89,11 +89,17 @@ function sunIntensity(zc) {
   return EE * Math.max(0, 1 - Math.exp(-(cutoffAngle - Math.acos(zc)) / steepness));
 }
 
+const _betaR = [0, 0, 0];
+const _betaM = [0, 0, 0];
 export function skyRadiance(dir, sun, p, out = [0, 0, 0]) {
   const sunE = sunIntensity(sun.y);
-  const betaR = totalRayleigh.map((v) => v * p.rayleigh);
   const c = 0.2 * p.turbidity * 10e-18;
-  const betaM = MieConst.map((m) => 0.434 * c * m * p.mieCoefficient);
+  const betaR = _betaR,
+    betaM = _betaM;
+  for (let i = 0; i < 3; i++) {
+    betaR[i] = totalRayleigh[i] * p.rayleigh;
+    betaM[i] = 0.434 * c * MieConst[i] * p.mieCoefficient;
+  }
   const zen = Math.acos(Math.max(0, dir.y));
   const inv = 1 / (Math.cos(zen) + 0.15 * Math.pow(93.885 - (zen * 180) / Math.PI, -1.253));
   const sR = 8.4e3 * inv,
@@ -167,6 +173,7 @@ uniform float showSun;
 uniform vec3 horizonColor;
 uniform vec3 horizonSunColor;
 uniform float skyScale;
+uniform float starMoon;
 
 const float pi = 3.141592653589793;
 const float rayleighZenithLength = 8.4E3;
@@ -226,7 +233,7 @@ void main() {
   // night sky: deep blue gradient + stars + moon
   vec3 nightCol = mix( vec3( 0.0045, 0.0075, 0.016 ), vec3( 0.0012, 0.0022, 0.006 ), smoothstep( 0.0, 0.6, direction.y ) );
   col += nightCol * night;
-  if ( night > 0.01 && direction.y > 0.0 ) {
+  if ( starMoon > 0.5 && night > 0.01 && direction.y > 0.0 ) {
     vec3 sp = direction * 380.0;
     vec3 cell = floor( sp );
     float h = hash13( cell );
@@ -242,6 +249,7 @@ void main() {
   }
 
   // clouds
+  float cloudA = 0.0;
   if ( direction.y > 0.0 && cloudCoverage > 0.0 ) {
     vec2 uv = direction.xz / ( direction.y + 0.08 ) * 0.9;
     uv += vec2( time * 0.0035, time * 0.0012 );
@@ -272,6 +280,7 @@ void main() {
     float alpha = ( 1.0 - exp( depth * cloudDensity * -12.0 ) ) * horizonFade;
     vec3 aerial = mix( col, cc, clamp( Fex * 1.2, 0.0, 1.0 ) );
     col = mix( col, aerial, alpha );
+    cloudA = alpha;
   }
 
   // Blend towards the fog colour at the horizon so terrain silhouettes melt in
@@ -283,7 +292,61 @@ void main() {
   if ( direction.y < 0.0 ) col = mix( hz, groundColor, groundMix * smoothstep( 0.0, -0.15, direction.y ) );
   col = max( col, vec3( 0.0 ) );
   if ( any( isnan( col ) ) ) col = hz;
-  gl_FragColor = vec4( min( col, vec3( 2000.0 ) ), 1.0 );
+  // alpha carries cloud cover, so the cached sky can hide the sun and stars behind clouds
+  gl_FragColor = vec4( min( col, vec3( 2000.0 ) ), cloudA );
+}`;
+
+// The sky drawn on screen: the cached scattering / clouds cube, plus the sharp parts that
+// need full resolution (sun disc, moon, stars). It sits at the far plane and is drawn after
+// the opaque world, so only pixels where sky is actually visible run this shader.
+const skyViewVertex = /* glsl */ `
+varying vec3 vDir;
+void main() {
+  vDir = position;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+  // Keep the sky at the far plane even in the short-range reflection camera.
+  #ifdef USE_REVERSED_DEPTH_BUFFER
+    gl_Position.z = 0.0;
+  #else
+    gl_Position.z = gl_Position.w;
+  #endif
+}`;
+
+const skyViewFragment = /* glsl */ `
+uniform samplerCube tSky;
+uniform vec3 sunDirection;
+uniform vec3 sunDiscColor;
+uniform vec3 moonDirection;
+uniform float night;
+uniform float time;
+varying vec3 vDir;
+float hash13( vec3 p3 ) {
+  p3 = fract( p3 * 0.1031 );
+  p3 += dot( p3, p3.zyx + 31.32 );
+  return fract( ( p3.x + p3.y ) * p3.z );
+}
+void main() {
+  vec3 direction = normalize( vDir );
+  vec4 sky = textureCube( tSky, direction );
+  vec3 col = sky.rgb;
+  float clear = 1.0 - sky.a;
+  float cosTheta = dot( direction, sunDirection );
+  col += sunDiscColor * smoothstep( 0.99995, 0.99997, cosTheta ) * clear;
+  if ( night > 0.01 && direction.y > 0.0 ) {
+    vec3 sp = direction * 380.0;
+    vec3 cell = floor( sp );
+    float h = hash13( cell );
+    if ( h > 0.9965 ) {
+      vec3 center = cell + 0.5 + ( vec3( hash13( cell + 1.3 ), hash13( cell + 2.7 ), hash13( cell + 5.1 ) ) - 0.5 ) * 0.6;
+      float d = length( sp - center );
+      float tw = 0.7 + 0.3 * sin( time * ( 2.0 + h * 5.0 ) + h * 100.0 );
+      col += vec3( 0.9, 0.95, 1.0 ) * smoothstep( 0.35, 0.0, d ) * ( h - 0.9965 ) * 180.0 * night * tw * smoothstep( 0.0, 0.2, direction.y ) * clear;
+    }
+    float md = dot( direction, normalize( moonDirection ) );
+    col += vec3( 0.9, 0.92, 1.0 ) * smoothstep( 0.99965, 0.99975, md ) * 1.2 * night * clear;
+    col += vec3( 0.25, 0.3, 0.45 ) * pow( max( md, 0.0 ), 60.0 ) * 0.06 * night;
+  }
+  gl_FragColor = vec4( col, 1.0 );
 }`;
 
 export class Sky {
@@ -305,6 +368,7 @@ export class Sky {
       horizonColor: { value: new THREE.Color() },
       horizonSunColor: { value: new THREE.Color() },
       skyScale: { value: SKY_EXPOSURE },
+      starMoon: { value: 1 },
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -324,6 +388,67 @@ export class Sky {
   }
 }
 
+// The on-screen sky: samples a cube of the full sky model that is refreshed one face per
+// frame (clouds drift and the sun moves slowly), so the heavy scattering and cloud noise run
+// on ~150k cube texels a frame instead of every sky pixel on screen.
+export class SkyView {
+  constructor(size = 384) {
+    this.source = new Sky();
+    this.source.uniforms.showSun.value = 0;
+    this.source.uniforms.starMoon.value = 0;
+    this.scene = new THREE.Scene();
+    this.scene.add(this.source.mesh);
+    this.rt = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: false });
+    this.rt.texture.minFilter = this.rt.texture.magFilter = THREE.LinearFilter;
+    this.cam = new THREE.CubeCamera(1, 2000, this.rt);
+    this.scene.add(this.cam);
+    this.face = 0;
+    this.primed = false;
+    this.uniforms = {
+      tSky: { value: this.rt.texture },
+      sunDirection: this.source.uniforms.sunDirection,
+      sunDiscColor: { value: new THREE.Color() },
+      moonDirection: this.source.uniforms.moonDirection,
+      night: this.source.uniforms.night,
+      time: this.source.uniforms.time,
+    };
+    const mat = new THREE.ShaderMaterial({
+      uniforms: this.uniforms,
+      vertexShader: skyViewVertex,
+      fragmentShader: skyViewFragment,
+      side: THREE.BackSide,
+      depthWrite: false,
+      depthTest: true,
+      fog: false,
+      toneMapped: false,
+    });
+    // a sphere just inside the far plane, beyond everything else in the world
+    this.mesh = new THREE.Mesh(new THREE.SphereGeometry(15500, 32, 16), mat);
+    this.mesh.frustumCulled = false;
+    this.mesh.renderOrder = 1000;
+    this.mesh.name = 'sky';
+    this.uniforms = mat.uniforms;
+  }
+
+  // refresh one cube face (all six the first time, or after a jump in time of day)
+  update(renderer, all = false) {
+    const cam = this.cam;
+    if (cam.coordinateSystem !== renderer.coordinateSystem) {
+      cam.coordinateSystem = renderer.coordinateSystem;
+      cam.updateCoordinateSystem();
+    }
+    const prev = renderer.getRenderTarget();
+    const faces = all || !this.primed ? 6 : 1;
+    for (let k = 0; k < faces; k++) {
+      renderer.setRenderTarget(this.rt, this.face);
+      renderer.render(this.scene, cam.children[this.face]);
+      this.face = (this.face + 1) % 6;
+    }
+    renderer.setRenderTarget(prev);
+    this.primed = true;
+  }
+}
+
 // --------------------------------------------------------------------------
 // Time of day + lighting + env map
 
@@ -336,8 +461,9 @@ export class Environment {
     this.hour = 15.2;
     this.mode = 'dynamic';
     this.dayMinutes = 24;
-    this.sky = new Sky();
-    scene.add(this.sky.mesh);
+    this.skyView = new SkyView();
+    this.sky = this.skyView.source; // the full sky model (drawn into the cube)
+    scene.add(this.skyView.mesh);
 
     this.sun = new THREE.DirectionalLight(0xffffff, 3);
     this.sun.castShadow = true;
@@ -390,6 +516,7 @@ export class Environment {
     this.mode = mode;
     if (PRESETS[mode] !== undefined) this.hour = PRESETS[mode];
     this.lastEnvHour = -99;
+    this.skyView.primed = false;
   }
 
   computeSun(hour, out) {
@@ -425,15 +552,17 @@ export class Environment {
     u.moonDirection.value.set(-sunDir.x * 0.8 + 0.2, Math.max(0.25, -sunDir.y), -sunDir.z * 0.8 - 0.3).normalize();
 
     // horizon colours for fog (sampled from the sky model)
-    const p = { rayleigh: u.rayleigh.value, turbidity: u.turbidity.value, mieCoefficient: u.mieCoefficient.value, mieDirectionalG: u.mieDirectionalG.value };
+    const T = this._tmp2 || (this._tmp2 = { p: {}, toward: {}, away: {}, side: {}, c1: [0, 0, 0], c2: [0, 0, 0], c3: [0, 0, 0] });
+    const p = T.p;
+    p.rayleigh = u.rayleigh.value;
+    p.turbidity = u.turbidity.value;
+    p.mieCoefficient = u.mieCoefficient.value;
+    p.mieDirectionalG = u.mieDirectionalG.value;
     const hs = Math.hypot(sunDir.x, sunDir.z) || 1;
-    const toward = { x: sunDir.x / hs, y: 0.06, z: sunDir.z / hs };
-    const away = { x: -sunDir.x / hs, y: 0.06, z: -sunDir.z / hs };
-    const side = { x: -sunDir.z / hs, y: 0.06, z: sunDir.x / hs };
-    const c1 = skyRadiance(normalize3(away), sunDir, p, [0, 0, 0]);
-    const c3 = skyRadiance(normalize3(side), sunDir, p, [0, 0, 0]);
-    const c2 = skyRadiance(normalize3(toward), sunDir, p, [0, 0, 0]);
-    const nightFog = [0.0035, 0.0055, 0.011];
+    const c1 = skyRadiance(setNorm(T.away, -sunDir.x / hs, 0.06, -sunDir.z / hs), sunDir, p, T.c1);
+    const c3 = skyRadiance(setNorm(T.side, -sunDir.z / hs, 0.06, sunDir.x / hs), sunDir, p, T.c3);
+    const c2 = skyRadiance(setNorm(T.toward, sunDir.x / hs, 0.06, sunDir.z / hs), sunDir, p, T.c2);
+    const nightFog = NIGHT_FOG;
     for (let i = 0; i < 3; i++) {
       c1[i] = lerp((c1[i] + c3[i]) * 0.5, nightFog[i], night);
       c2[i] = Math.min(c2[i], c1[i] * 1.45 + 0.01);
@@ -484,22 +613,37 @@ export class Environment {
 
     // Shadow camera follows the focus point with texel snapping
     if (focus) {
-      const L = this.sun.position.clone().normalize();
+      const L = _L.copy(this.sun.position).normalize();
       const dist = 500;
       const r = this.shadowRange;
       const texel = (2 * r) / this.sun.shadow.mapSize.x;
       // build light-space basis to snap
-      const up = Math.abs(L.y) > 0.99 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-      const right = new THREE.Vector3().crossVectors(up, L).normalize();
-      const up2 = new THREE.Vector3().crossVectors(L, right);
+      const up = Math.abs(L.y) > 0.99 ? _X : _Y;
+      const right = _right.crossVectors(up, L).normalize();
+      const up2 = _up2.crossVectors(L, right);
       const fx = Math.round(focus.dot(right) / texel) * texel;
       const fy = Math.round(focus.dot(up2) / texel) * texel;
       const fz = focus.dot(L);
-      const snapped = right.multiplyScalar(fx).add(up2.multiplyScalar(fy)).add(L.clone().multiplyScalar(fz));
+      const snapped = right.multiplyScalar(fx).add(up2.multiplyScalar(fy)).addScaledVector(L, fz);
       this.sun.target.position.copy(snapped);
       this.sun.position.copy(snapped).addScaledVector(L, dist);
       this.sun.target.updateMatrixWorld();
     }
+
+    // colour of the sun disc drawn over the cached sky (scattering along the sun's direction)
+    {
+      const sunE = sunIntensity(sunDir.y);
+      const zen = Math.acos(Math.max(0, sunDir.y));
+      const inv = 1 / (Math.cos(zen) + 0.15 * Math.pow(93.885 - (zen * 180) / Math.PI, -1.253));
+      const c = 0.2 * u.turbidity.value * 10e-18;
+      const disc = this._disc || (this._disc = [0, 0, 0]);
+      for (let i = 0; i < 3; i++) {
+        const fex = Math.exp(-(totalRayleigh[i] * u.rayleigh.value * 8.4e3 * inv + 0.434 * c * MieConst[i] * u.mieCoefficient.value * 1.25e3 * inv));
+        disc[i] = 900 * Math.min(sunE * fex, 60) * 0.04 * 0.35 * SKY_EXPOSURE;
+      }
+      this.skyView.uniforms.sunDiscColor.value.setRGB(disc[0], disc[1], disc[2], THREE.LinearSRGBColorSpace);
+    }
+    this.skyView.update(this.renderer);
 
     // refresh env map when the sun has moved enough
     this.envTimer -= dt;
@@ -518,7 +662,17 @@ export class Environment {
   }
 }
 
-function normalize3(v) {
-  const l = Math.hypot(v.x, v.y, v.z) || 1;
-  return { x: v.x / l, y: v.y / l, z: v.z / l };
+function setNorm(o, x, y, z) {
+  const l = Math.hypot(x, y, z) || 1;
+  o.x = x / l;
+  o.y = y / l;
+  o.z = z / l;
+  return o;
 }
+
+const NIGHT_FOG = [0.0035, 0.0055, 0.011];
+const _L = new THREE.Vector3();
+const _X = new THREE.Vector3(1, 0, 0);
+const _Y = new THREE.Vector3(0, 1, 0);
+const _right = new THREE.Vector3();
+const _up2 = new THREE.Vector3();

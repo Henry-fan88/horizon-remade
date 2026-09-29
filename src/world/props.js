@@ -34,8 +34,9 @@ function mat4(x, y, z, rotY = 0, sx = 1, sy = 1, sz = 1) {
   return new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), _q.clone(), new THREE.Vector3(sx, sy, sz));
 }
 
-// Small construction details share one instanced draw call per material.
-function detailBatch(parent) {
+// Small construction details share one instanced draw call per material (per area cell
+// when a chunker is given, so distant trim is culled with its block).
+function detailBatch(parent, chunker = null) {
   const batches = new Map();
   return {
     box(material, x, y, z, w, h, d, yaw = 0) {
@@ -44,10 +45,18 @@ function detailBatch(parent) {
     },
     flush() {
       const geometry = new THREE.BoxGeometry(1, 1, 1);
-      for (const [material, matrices] of batches) parent.add(instanced(geometry, material, matrices));
+      for (const [material, matrices] of batches) {
+        if (chunker) chunker(geometry, material, matrices);
+        else parent.add(instanced(geometry, material, matrices));
+      }
     },
   };
 }
+
+// Island-wide instanced props are split into cells so each InstancedMesh has a tight
+// bounding sphere: the camera, reflection and shadow passes cull the cells out of view,
+// and Props.update() hides cells beyond the prop's draw distance.
+const CHUNK = 256;
 
 function tubeBetween(a, b, radius = .05, sides = 6) {
   const start = new THREE.Vector3(...a), end = new THREE.Vector3(...b);
@@ -156,6 +165,7 @@ export class Props {
     this.smashables = [];
     this.boards = [];
     this.archMaterials = makeArchitecturalMaterials();
+    this.chunks = [];
     const hf = this.world.hf;
     this.h = (x, z) => hf.height(x, z);
     this.buildFestival();
@@ -171,6 +181,34 @@ export class Props {
     this.buildViewpoint();
     this.buildPlume();
     game.scene.add(this.group);
+  }
+
+  // Split instances by area cell. Returns, per input matrix, [mesh, index in that mesh].
+  chunked(geo, mat, matrices, { cast = true, receive = true, maxDist = 900, shadowDist = 260, cell = CHUNK } = {}) {
+    const cells = new Map();
+    matrices.forEach((m, i) => {
+      const k = Math.floor(m.elements[12] / cell) * 4096 + Math.floor(m.elements[14] / cell);
+      let c = cells.get(k);
+      if (!c) cells.set(k, (c = []));
+      c.push(i);
+    });
+    const lookup = new Array(matrices.length);
+    for (const list of cells.values()) {
+      const im = new THREE.InstancedMesh(geo, mat, list.length);
+      list.forEach((i, k) => {
+        im.setMatrixAt(k, matrices[i]);
+        lookup[i] = [im, k];
+      });
+      im.count = list.length;
+      im.castShadow = cast;
+      im.receiveShadow = receive;
+      im.computeBoundingSphere();
+      im.matrixAutoUpdate = false;
+      this.group.add(im);
+      const b = im.boundingSphere;
+      this.chunks.push({ mesh: im, x: b.center.x, z: b.center.z, r: b.radius, maxDist, shadowDist, cast });
+    }
+    return lookup;
   }
 
   // ------------------------------------------------------------------ festival
@@ -553,7 +591,8 @@ export class Props {
     }
     const boxGeo = new THREE.BoxGeometry(1, 1, 1);
     boxGeo.translate(0, 0.5, 0);
-    const townDetails = detailBatch(this.group);
+    // the whole town's trim is one cell per material: drawn together, dropped together
+    const townDetails = detailBatch(this.group, (g, m, list) => this.chunked(g, m, list, { maxDist: 700, shadowDist: 260, cell: 100000 }));
     const roofParts = [];
     const shopSigns = ['CAFÉ ISLA', 'MERCADO', 'TALLER', 'CASA DEL SOL'].map((label, i) => new THREE.MeshStandardMaterial({
       map: makeTextTexture(label, { w: 512, h: 96, bg: ['#e1d6be', '#405d58', '#344148', '#b6a084'][i], fg: i === 0 ? '#42443a' : '#eae6db', font: '600 54px "Barlow Condensed", sans-serif' }), roughness: .84,
@@ -811,10 +850,11 @@ export class Props {
     head.translate(0, 7.8, 2.0);
     const pm = [];
     for (let i = 0; i < n; i++) pm.push(mat4(lamps[i * 4], lamps[i * 4 + 1], lamps[i * 4 + 2], lamps[i * 4 + 3]));
-    this.group.add(instanced(metalGeo, std(0x3c3f45, { metalness: 0.7, roughness: 0.4 }), pm));
+    this.chunked(metalGeo, std(0x3c3f45, { metalness: 0.7, roughness: 0.4 }), pm, { maxDist: 900 });
     const headMat = new THREE.MeshStandardMaterial({ color: 0x777777, emissive: 0xffd9a0, emissiveIntensity: 0 });
     this.nightMats.push({ mat: headMat, day: 0, night: 12 });
-    this.group.add(instanced(head, headMat, pm, { cast: false }));
+    // lamp heads glow at night, so they stay visible further out
+    this.chunked(head, headMat, pm, { cast: false, maxDist: 1800 });
     // light pools on the road at night
     const poolTex = makeGlow();
     const poolMat = new THREE.MeshBasicMaterial({ map: poolTex, color: 0xffc27a, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8 });
@@ -828,7 +868,7 @@ export class Props {
         z = lamps[i * 4 + 2] + Math.cos(r) * 2.2;
       pools.push(mat4(x, this.h(x, z) + 0.12, z));
     }
-    this.group.add(instanced(pg, poolMat, pools, { cast: false, receive: false }));
+    this.chunked(pg, poolMat, pools, { cast: false, receive: false, maxDist: 700 });
     const col = this.game.collision;
     for (let i = 0; i < n; i++) col.addCircle(lamps[i * 4], lamps[i * 4 + 2], 0.2, lamps[i * 4 + 1], lamps[i * 4 + 1] + 8, 'pole');
   }
@@ -863,8 +903,8 @@ export class Props {
       col.addSegment(x1, z1, x2, z2, 0.25, Math.min(y1, y2) - 1, Math.max(y1, y2) + 1.0, 'rail');
     }
     const railMat = std(0xb9bec4, { metalness: 0.85, roughness: 0.35 });
-    this.group.add(instanced(beam, railMat, bm));
-    this.group.add(instanced(post, std(0x5a5d62, { metalness: 0.6 }), pm));
+    this.chunked(beam, railMat, bm, { maxDist: 700 });
+    this.chunked(post, std(0x5a5d62, { metalness: 0.6 }), pm, { maxDist: 450 });
   }
 
   buildChevrons(chev) {
@@ -899,22 +939,11 @@ export class Props {
       pm = [];
     const mats = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xffffff, emissiveMap: tex, emissiveIntensity: 0.15, side: THREE.DoubleSide });
     this.nightMats.push({ mat: mats, day: 0.1, night: 0.9 });
-    const boardIM = new THREE.InstancedMesh(board, mats, n);
-    const postIM = new THREE.InstancedMesh(postG, std(0x444444), n);
-    for (let i = 0; i < n; i++) {
-      const x = chev[i * 5],
-        y = chev[i * 5 + 1],
-        z = chev[i * 5 + 2],
-        r = chev[i * 5 + 3],
-        sd = chev[i * 5 + 4];
-      const m = new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromAxisAngle(_up, r + Math.PI), new THREE.Vector3(sd, 1, 1));
-      boardIM.setMatrixAt(i, m);
-      postIM.setMatrixAt(i, m);
-      this.addSmashable({ x, z, y, r: 0.5, kind: 'sign', mass: 30, ims: [boardIM, postIM], index: i, m0: m.clone() });
-    }
-    boardIM.castShadow = true;
-    postIM.castShadow = true;
-    this.group.add(boardIM, postIM);
+    const ms = [];
+    for (let i = 0; i < n; i++) ms.push(new THREE.Matrix4().compose(new THREE.Vector3(chev[i * 5], chev[i * 5 + 1], chev[i * 5 + 2]), new THREE.Quaternion().setFromAxisAngle(_up, chev[i * 5 + 3] + Math.PI), new THREE.Vector3(chev[i * 5 + 4], 1, 1)));
+    const boards = this.chunked(board, mats, ms, { maxDist: 600 });
+    const posts = this.chunked(postG, std(0x444444), ms, { maxDist: 450 });
+    for (let i = 0; i < n; i++) this.addSmashable({ x: chev[i * 5], z: chev[i * 5 + 2], y: chev[i * 5 + 1], r: 0.5, kind: 'sign', mass: 30, parts: [boards[i], posts[i]], m0: ms[i] });
   }
 
   buildFences(f) {
@@ -925,20 +954,11 @@ export class Props {
     const rail = new THREE.BoxGeometry(0.06, 0.12, 3.1);
     const railGeo = mergeGeometries([rail.clone().translate(0, 0.45, -1.5), rail.clone().translate(0, 0.95, -1.5)]);
     const wood = this.archMaterials.wood;
-    const postIM = new THREE.InstancedMesh(post, wood, n);
-    const railIM = new THREE.InstancedMesh(railGeo, wood, n);
-    for (let i = 0; i < n; i++) {
-      const x = f[i * 4],
-        y = f[i * 4 + 1],
-        z = f[i * 4 + 2],
-        r = f[i * 4 + 3];
-      const m = mat4(x, y - 0.05, z, r);
-      postIM.setMatrixAt(i, m);
-      railIM.setMatrixAt(i, m);
-      this.addSmashable({ x, z, y, r: 0.7, kind: 'fence', mass: 20, ims: [postIM, railIM], index: i, m0: m.clone() });
-    }
-    postIM.castShadow = railIM.castShadow = true;
-    this.group.add(postIM, railIM);
+    const ms = [];
+    for (let i = 0; i < n; i++) ms.push(mat4(f[i * 4], f[i * 4 + 1] - 0.05, f[i * 4 + 2], f[i * 4 + 3]));
+    const posts = this.chunked(post, wood, ms, { maxDist: 420 });
+    const rails = this.chunked(railGeo, wood, ms, { maxDist: 420 });
+    for (let i = 0; i < n; i++) this.addSmashable({ x: f[i * 4], z: f[i * 4 + 2], y: f[i * 4 + 1], r: 0.7, kind: 'fence', mass: 20, parts: [posts[i], rails[i]], m0: ms[i] });
   }
 
   buildTurbines(t) {
@@ -1013,32 +1033,21 @@ export class Props {
     const legGeo = mergeGeometries([new THREE.BoxGeometry(0.12, 1.4, 0.12).translate(-1.3, 0.7, 0), new THREE.BoxGeometry(0.12, 1.4, 0.12).translate(1.3, 0.7, 0)]);
     const mat = new THREE.MeshStandardMaterial({ map: tex, emissive: 0xff8a1f, emissiveMap: tex, emissiveIntensity: 0.25 });
     this.nightMats.push({ mat, day: 0.25, night: 1.2 });
-    const bIM = new THREE.InstancedMesh(boardGeo, mat, n);
-    const lIM = new THREE.InstancedMesh(legGeo, std(0x333333), n);
     const smashed = new Set(this.game.save?.data.boards || []);
+    const ms = [];
+    for (let i = 0; i < n; i++) ms.push(smashed.has(i) ? new THREE.Matrix4().makeScale(0, 0, 0).setPosition(b[i * 4], b[i * 4 + 1], b[i * 4 + 2]) : mat4(b[i * 4], b[i * 4 + 1], b[i * 4 + 2], b[i * 4 + 3]));
+    const panels = this.chunked(boardGeo, mat, ms, { maxDist: 900 });
+    const legs = this.chunked(legGeo, std(0x333333), ms, { maxDist: 500 });
     for (let i = 0; i < n; i++) {
-      const x = b[i * 4],
-        y = b[i * 4 + 1],
-        z = b[i * 4 + 2],
-        r = b[i * 4 + 3];
-      const m = mat4(x, y, z, r);
-      bIM.setMatrixAt(i, m);
-      lIM.setMatrixAt(i, m);
-      const board = { x, z, y, id: i };
+      const board = { x: b[i * 4], z: b[i * 4 + 2], y: b[i * 4 + 1], id: i };
       this.boards.push(board);
       if (smashed.has(i)) {
         board.alive = false;
-        const z0 = new THREE.Matrix4().makeScale(0, 0, 0);
-        bIM.setMatrixAt(i, z0);
-        lIM.setMatrixAt(i, z0);
         continue;
       }
       board.alive = true;
-      const sm = this.addSmashable({ x, z, y, r: 1.4, kind: 'board', mass: 25, ims: [bIM, lIM], index: i, board });
-      board.smash = sm;
+      board.smash = this.addSmashable({ x: board.x, z: board.z, y: board.y, r: 1.4, kind: 'board', mass: 25, parts: [panels[i], legs[i]], board });
     }
-    bIM.castShadow = lIM.castShadow = true;
-    this.group.add(bIM, lIM);
   }
 
   buildLighthouse() {
@@ -1129,9 +1138,9 @@ export class Props {
   }
 
   smashed(o) {
-    const z0 = new THREE.Matrix4().makeScale(0, 0, 0);
-    for (const im of o.ims) {
-      im.setMatrixAt(o.index, z0);
+    const z0 = new THREE.Matrix4().makeScale(0, 0, 0).setPosition(o.x, o.y, o.z);
+    for (const [im, k] of o.parts) {
+      im.setMatrixAt(k, z0);
       im.instanceMatrix.needsUpdate = true;
     }
     if (o.board) {
@@ -1141,8 +1150,8 @@ export class Props {
     // fences and signs are rebuilt after a while
     if (!o.board && o.m0) {
       setTimeout(() => {
-        for (const im of o.ims) {
-          im.setMatrixAt(o.index, o.m0);
+        for (const [im, k] of o.parts) {
+          im.setMatrixAt(k, o.m0);
           im.instanceMatrix.needsUpdate = true;
         }
         o.alive = true;
@@ -1151,6 +1160,13 @@ export class Props {
   }
 
   update(dt, env) {
+    // draw distance per cell; shadows only for cells near the camera
+    const cam = this.game.camera.position;
+    for (const c of this.chunks) {
+      const d = Math.hypot(c.x - cam.x, c.z - cam.z) - c.r;
+      c.mesh.visible = d < c.maxDist;
+      if (c.cast) c.mesh.castShadow = d < c.shadowDist;
+    }
     const t = atmo.time.value;
     for (const a of this.animated) a(dt, t);
     const night = env.nightFactor;

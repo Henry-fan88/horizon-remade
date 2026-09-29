@@ -25,6 +25,8 @@ const KEYMAP = {
   tab: ['Tab'],
 };
 
+const PAD_MAP = { accept: 0, back: 1, handbrake: 0, camera: 3, rewind: 2, pause: 9, map: 8, shiftUp: 5, shiftDown: 4, reset: 11, lookBack: 10, horn: 12, lights: 13 };
+
 export class Input {
   constructor(target = window) {
     this.down = new Set();
@@ -51,35 +53,52 @@ export class Input {
     window.addEventListener('gamepadconnected', () => (this.lastDevice = 'gamepad'));
   }
 
+  // (plain loops: these run many times per frame and must not allocate)
   key(action) {
-    return KEYMAP[action].some((k) => this.down.has(k));
+    const keys = KEYMAP[action];
+    for (let i = 0; i < keys.length; i++) if (this.down.has(keys[i])) return true;
+    return false;
   }
 
   // true once per key press (keyboard or gamepad)
   hit(action) {
-    const kb = KEYMAP[action].some((k) => this.pressed.has(k));
-    return kb || this.padHit(action);
+    const keys = KEYMAP[action];
+    for (let i = 0; i < keys.length; i++) if (this.pressed.has(keys[i])) return true;
+    return this.padHit(action);
   }
 
   padHit(action) {
-    const map = { accept: 0, back: 1, handbrake: 0, camera: 3, rewind: 2, pause: 9, map: 8, shiftUp: 5, shiftDown: 4, reset: 11, lookBack: 10, horn: 12, lights: 13 };
-    const b = map[action];
+    const b = PAD_MAP[action];
     if (b === undefined) return false;
     return !!this.padButtons[b] && !this.padPrev[b];
   }
 
   poll() {
-    this.padPrev = this.padButtons.slice();
-    const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+    // swap the two button arrays instead of allocating new ones
+    const prev = this.padPrev;
+    this.padPrev = this.padButtons;
+    this.padButtons = prev;
+    this.padButtons.length = 0;
     this.gamepad = null;
-    for (const p of pads) if (p && p.connected) {
-      this.gamepad = p;
-      break;
+    if (!navigator.getGamepads) return;
+    const pads = navigator.getGamepads();
+    for (let i = 0; i < pads.length; i++) {
+      const p = pads[i];
+      if (p && p.connected) {
+        this.gamepad = p;
+        break;
+      }
     }
     if (this.gamepad) {
-      this.padButtons = this.gamepad.buttons.map((b) => b.pressed || b.value > 0.5);
-      if (this.padButtons.some((b, i) => b && !this.padPrev[i]) || Math.abs(this.gamepad.axes[0] || 0) > 0.3) this.lastDevice = 'gamepad';
-    } else this.padButtons = [];
+      const btn = this.gamepad.buttons;
+      let fresh = false;
+      for (let i = 0; i < btn.length; i++) {
+        const on = btn[i].pressed || btn[i].value > 0.5;
+        this.padButtons[i] = on;
+        if (on && !this.padPrev[i]) fresh = true;
+      }
+      if (fresh || Math.abs(this.gamepad.axes[0] || 0) > 0.3) this.lastDevice = 'gamepad';
+    }
   }
 
   endFrame() {
@@ -123,7 +142,12 @@ export class Input {
       const rate = steerRaw === 0 ? 6.5 : Math.sign(steerRaw) !== Math.sign(this.steerSmooth) ? 9 : 3.6;
       this.steerSmooth += clamp(steerRaw - this.steerSmooth, -rate * dt, rate * dt);
     } else this.steerSmooth = steerRaw;
-    return { throttle, brake, steer: clamp(this.steerSmooth, -1, 1), handbrake };
+    const out = this._ctl || (this._ctl = { throttle: 0, brake: 0, steer: 0, handbrake: 0 });
+    out.throttle = throttle;
+    out.brake = brake;
+    out.steer = clamp(this.steerSmooth, -1, 1);
+    out.handbrake = handbrake;
+    return out;
   }
 
   // menu navigation: returns {x, y} steps this frame

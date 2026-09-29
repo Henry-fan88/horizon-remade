@@ -1,5 +1,7 @@
 // Race manager: grid, countdown, progress/positions, laps, checkpoints, driving line, results.
 import * as THREE from 'three';
+
+const _dv = new THREE.Vector3();
 import { clamp, formatTime } from '../core/math.js';
 import { AIDriver, drivatarNames } from './ai.js';
 import { Vehicle } from '../vehicle/vehicle.js';
@@ -336,7 +338,7 @@ export class RaceManager {
     } else if (A.state === 'racing' || A.state === 'finishing') {
       A.raceTime += dt;
       // AI
-      const others = A.racers.map((r) => r.v);
+      const others = A.others || (A.others = A.racers.map((r) => r.v));
       for (const r of A.racers) {
         if (r.ai && !r.finished) {
           // rubber banding relative to the player
@@ -399,7 +401,7 @@ export class RaceManager {
         const pp = game.player.physics;
         game.drafting = A.racers.some((r) => {
           if (r.isPlayer) return false;
-          const d = r.v.physics.pos.clone().sub(pp.pos);
+          const d = _dv.subVectors(r.v.physics.pos, pp.pos);
           const f = d.x * hx + d.z * hz;
           const l = Math.abs(d.x * hz - d.z * hx);
           return f > 3 && f < 15 && l < 1.8;
@@ -414,7 +416,12 @@ export class RaceManager {
       }
       A.line.material.uniforms.uPlayerS.value = this.lapLocal(pr.dist);
     }
-    this.updateHUD();
+    // the standings panel is rebuilt as HTML: 12 times a second is plenty
+    A.hudT = (A.hudT || 0) - dt;
+    if (A.hudT <= 0 || A.state !== 'racing') {
+      A.hudT = 1 / 12;
+      this.updateHUD();
+    }
   }
 
   lapIndex(d) {

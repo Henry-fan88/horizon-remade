@@ -4,6 +4,8 @@ import { clamp, lerp } from './math.js';
 const PROFILES = {
   v8: { cyl: 8, sub: 0.9, saw: 0.55, sq: 0.25, noise: 0.35, cutoff: 900, rough: 0.35, drive: 3.2 },
   v8t: { cyl: 8, sub: 0.7, saw: 0.6, sq: 0.3, noise: 0.3, cutoff: 1300, rough: 0.2, drive: 2.6 },
+  // flat-plane crank, naturally aspirated: a harder, higher-pitched howl than a cross-plane V8
+  v8flat: { cyl: 8, sub: 0.3, saw: 0.72, sq: 0.4, noise: 0.24, cutoff: 2300, rough: 0.07, drive: 2.5 },
   v12: { cyl: 12, sub: 0.25, saw: 0.7, sq: 0.35, noise: 0.25, cutoff: 2400, rough: 0.08, drive: 2.2 },
   flat6: { cyl: 6, sub: 0.5, saw: 0.6, sq: 0.45, noise: 0.35, cutoff: 1800, rough: 0.2, drive: 2.8 },
   i6: { cyl: 6, sub: 0.35, saw: 0.65, sq: 0.25, noise: 0.25, cutoff: 1500, rough: 0.12, drive: 2.2 },
@@ -117,6 +119,30 @@ export class AudioEngine {
     this.roadGain = ctx.createGain();
     this.roadGain.gain.value = 0;
     rn.connect(this.roadLP).connect(this.roadGain).connect(this.sfxBus);
+    // metal scraping along a wall or rail: gritty band-passed noise
+    const sn = this.noiseSource();
+    this.scrapeBP = ctx.createBiquadFilter();
+    this.scrapeBP.type = 'bandpass';
+    this.scrapeBP.frequency.value = 2600;
+    this.scrapeBP.Q.value = 1.6;
+    this.scrapeGain = ctx.createGain();
+    this.scrapeGain.gain.value = 0;
+    sn.connect(this.scrapeBP).connect(this.scrapeGain).connect(this.sfxBus);
+  }
+
+  // level 0..1 while the car slides along something solid
+  updateScrape(level, speed) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this.scrapeGain.gain.setTargetAtTime(clamp(level, 0, 1) * 0.28, t, level > 0 ? 0.02 : 0.08);
+    this.scrapeBP.frequency.setTargetAtTime(1800 + Math.min(speed, 40) * 45 + Math.random() * 400, t, 0.03);
+  }
+
+  // heavy hit: body panels and glass
+  crunch(strength) {
+    const s = clamp(strength, 0, 1);
+    this.burst({ freq: 900, q: 0.6, dur: 0.25 + s * 0.2, gain: 0.5 * s });
+    this.burst({ freq: 5200, q: 1.2, type: 'bandpass', dur: 0.12 + s * 0.15, gain: 0.18 * s, attack: 0.004 });
   }
 
   // --------------------------------------------------------------- engines

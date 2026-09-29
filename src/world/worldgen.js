@@ -11,6 +11,7 @@
 
 import { SimplexNoise, mulberry32, smoothstep, saturate, lerp, clamp, MinHeap, hash2 } from '../core/math.js';
 import { HeightField } from './heightfield.js';
+import { computeBank, crossOffset } from './roadprofile.js';
 import { WORLD } from '../config.js';
 
 export const SURF = {
@@ -449,15 +450,416 @@ function smoothProfile(h, sigmaSamples, closed) {
   return out;
 }
 
-function limitGrade(h, ds, g, closed) {
+function limitGrade(h, ds, g, closed, fixed = null) {
   const n = h.length;
   for (let pass = 0; pass < 4; pass++) {
-    for (let i = 1; i < n; i++) h[i] = clamp(h[i], h[i - 1] - g * ds, h[i - 1] + g * ds);
-    for (let i = n - 2; i >= 0; i--) h[i] = clamp(h[i], h[i + 1] - g * ds, h[i + 1] + g * ds);
-    if (closed) {
+    for (let i = 1; i < n; i++) if (!fixed || !fixed[i]) h[i] = clamp(h[i], h[i - 1] - g * ds, h[i - 1] + g * ds);
+    for (let i = n - 2; i >= 0; i--) if (!fixed || !fixed[i]) h[i] = clamp(h[i], h[i + 1] - g * ds, h[i + 1] + g * ds);
+    if (closed && (!fixed || !fixed[0])) {
       h[0] = clamp(h[0], h[n - 1] - g * ds, h[n - 1] + g * ds);
     }
   }
+}
+
+// Minimum crest / sag radius (m) per road. A crest of radius R lifts a car off at
+// v = sqrt(g R): 700 m ~ 300 km/h, 350 m ~ 210 km/h, 160 m ~ 140 km/h.
+const VCURVE = {
+  'Costa Ring': [700, 420],
+  'Autopista Isla': [1400, 800],
+  'Via Central': [550, 350],
+  'Festival Drive': [450, 300],
+  'Volcán Spiral': [320, 220],
+  'Sierra Pass': [360, 240],
+  'Granja Road': [450, 300],
+  'Airfield Road': [400, 260],
+  'Airfield East': [400, 260],
+};
+const VCURVE_KIND = { highway: [1400, 800], road: [450, 300], street: [260, 160], runway: [2000, 2000], dirt: [160, 100] };
+
+// Uniform grid of finished road segments for nearest-surface queries during grading.
+class SegmentGrid {
+  constructor(cell) {
+    this.cell = cell;
+    this.map = new Map();
+    this.roads = [];
+  }
+  addRoad(road) {
+    const r = this.roads.length;
+    this.roads.push(road);
+    const p = road.pts;
+    const n = p.length / 3;
+    const segs = road.closed ? n : n - 1;
+    const c = this.cell;
+    for (let i = 0; i < segs; i++) {
+      const j = (i + 1) % n;
+      const x0 = Math.floor(Math.min(p[i * 3], p[j * 3]) / c),
+        x1 = Math.floor(Math.max(p[i * 3], p[j * 3]) / c);
+      const z0 = Math.floor(Math.min(p[i * 3 + 2], p[j * 3 + 2]) / c),
+        z1 = Math.floor(Math.max(p[i * 3 + 2], p[j * 3 + 2]) / c);
+      for (let cz = z0; cz <= z1; cz++)
+        for (let cx = x0; cx <= x1; cx++) {
+          const k = cx * 65537 + cz;
+          let a = this.map.get(k);
+          if (!a) this.map.set(k, (a = []));
+          a.push(r, i);
+        }
+    }
+  }
+  // Surface height of the finished roads near (x, z). Each road contributes its nearest
+  // point, weighted by distance, so the target glides between roads that meet each other.
+  nearest(x, z, maxD, out) {
+    const c = this.cell;
+    const r = Math.ceil(maxD / c);
+    const cx0 = Math.floor(x / c),
+      cz0 = Math.floor(z / c);
+    const per = this._per || (this._per = new Map());
+    per.clear();
+    for (let dz = -r; dz <= r; dz++)
+      for (let dx = -r; dx <= r; dx++) {
+        const a = this.map.get((cx0 + dx) * 65537 + cz0 + dz);
+        if (!a) continue;
+        for (let k = 0; k < a.length; k += 2) {
+          const road = this.roads[a[k]];
+          const i = a[k + 1];
+          const p = road.pts;
+          const n = p.length / 3;
+          const j = (i + 1) % n;
+          const ax = p[i * 3],
+            az = p[i * 3 + 2];
+          const ex = p[j * 3] - ax,
+            ez = p[j * 3 + 2] - az;
+          const l2 = ex * ex + ez * ez || 1e-9;
+          let t = ((x - ax) * ex + (z - az) * ez) / l2;
+          t = t < 0 ? 0 : t > 1 ? 1 : t;
+          const px = ax + ex * t,
+            pz = az + ez * t;
+          const d2 = (x - px) * (x - px) + (z - pz) * (z - pz);
+          if (d2 > maxD * maxD) continue;
+          const prev = per.get(a[k]);
+          if (prev && prev.d2 <= d2) continue;
+          const lat = ((x - px) * -ez + (z - pz) * ex) / Math.sqrt(l2);
+          const hw = road.width / 2;
+          const h = p[i * 3 + 1] + (p[j * 3 + 1] - p[i * 3 + 1]) * t + crossOffset(road.kind, hw, road.bank[i] + (road.bank[j] - road.bank[i]) * t, lat, road.crown[i] + (road.crown[j] - road.crown[i]) * t);
+          per.set(a[k], { d2, h, hw });
+        }
+      }
+    out.found = per.size > 0;
+    let wsum = 0,
+      hsum = 0,
+      dmin = Infinity,
+      hwNear = 0;
+    for (const v of per.values()) {
+      const d = Math.sqrt(v.d2);
+      const w = 1 / Math.pow(d + 1, 4);
+      wsum += w;
+      hsum += v.h * w;
+      if (d - v.hw < dmin) {
+        dmin = d - v.hw;
+        hwNear = v.hw;
+      }
+    }
+    out.h = wsum > 0 ? hsum / wsum : 0;
+    out.edge = dmin; // distance from the nearest road's edge
+    out.hw = hwNear;
+    return out;
+  }
+}
+
+// For every road, a 0..1 weight marking where any other road meets or crosses it (in plan
+// view), easing out over ~50 m along the road. Used to grade intersections flat.
+function findJunctionZones(defs) {
+  const zones = [];
+  const cell = 32;
+  const grid = new Map();
+  defs.forEach((rd, r) => {
+    rd.pts2.forEach((q, i) => {
+      const k = Math.floor(q[0] / cell) * 65537 + Math.floor(q[1] / cell);
+      let a = grid.get(k);
+      if (!a) grid.set(k, (a = []));
+      a.push(r, i);
+    });
+  });
+  defs.forEach((rd, r) => {
+    const p = rd.pts2;
+    const n = p.length;
+    const hit = new Uint8Array(n);
+    for (let i = 0; i < n; i++) {
+      const cx = Math.floor(p[i][0] / cell),
+        cz = Math.floor(p[i][1] / cell);
+      for (let dz = -1; dz <= 1 && !hit[i]; dz++)
+        for (let dx = -1; dx <= 1 && !hit[i]; dx++) {
+          const a = grid.get((cx + dx) * 65537 + cz + dz);
+          if (!a) continue;
+          for (let k = 0; k < a.length; k += 2) {
+            if (a[k] === r) continue;
+            const o = defs[a[k]];
+            const q = o.pts2[a[k + 1]];
+            const reach = (rd.width + o.width) / 2 + 6;
+            if ((q[0] - p[i][0]) ** 2 + (q[1] - p[i][1]) ** 2 < reach * reach) {
+              hit[i] = 1;
+              break;
+            }
+          }
+        }
+    }
+    const FADE = 25;
+    const z = new Float32Array(n);
+    let last = -1e9;
+    for (let i = 0; i < n; i++) {
+      if (hit[i]) last = i;
+      z[i] = Math.max(0, 1 - (i - last) / FADE);
+    }
+    last = 1e9;
+    for (let i = n - 1; i >= 0; i--) {
+      if (hit[i]) last = i;
+      z[i] = Math.max(z[i], 1 - (last - i) / FADE);
+    }
+    for (let i = 0; i < n; i++) z[i] = z[i] * z[i] * (3 - 2 * z[i]);
+    zones.push(z);
+  });
+  return zones;
+}
+
+// Samples of a new road that lie on (or right beside) an earlier road must share its
+// surface: the height at the centre line, and the cross slope under the new road (so a
+// side road meeting a graded road tilts to match it). Returns targets and a core mask.
+function junctionTargets(p, hw, grid) {
+  const n = p.length;
+  const target = new Float32Array(n);
+  const slope = new Float32Array(n);
+  const weight = new Float32Array(n);
+  const core = new Uint8Array(n);
+  const q = {};
+  for (let i = 0; i < n; i++) {
+    grid.nearest(p[i][0], p[i][1], hw + 18 + 16, q);
+    if (!q.found || q.edge >= hw + 14) continue;
+    weight[i] = 1 - smoothstep(hw + 4, hw + 14, q.edge);
+    // hard: the carriageways overlap, heights must match exactly; nearby samples are only
+    // pulled toward the other road, so a vertical curve can still round off the approach
+    core[i] = q.edge < 1.5 ? 1 : 0;
+    target[i] = q.h;
+    const a = p[Math.max(0, i - 1)],
+      b = p[Math.min(n - 1, i + 1)];
+    const tl = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+    const rx = -(b[1] - a[1]) / tl,
+      rz = (b[0] - a[0]) / tl;
+    const e = Math.min(2, hw);
+    const hr = grid.nearest(p[i][0] + rx * e, p[i][1] + rz * e, hw + 34, q).h;
+    const hl = grid.nearest(p[i][0] - rx * e, p[i][1] - rz * e, hw + 34, q).h;
+    slope[i] = Math.max(-0.12, Math.min(0.12, (hr - hl) / (2 * e)));
+  }
+  // a road that runs beside another one should not flicker in and out of it: close
+  // short gaps between core stretches
+  for (let i = 0; i < n; i++) {
+    if (!core[i] || i + 1 >= n || core[i + 1]) continue;
+    let j = i + 1;
+    while (j < n && !core[j] && weight[j] > 0) j++;
+    if (j < n && core[j] && j - i <= 16) for (let k = i + 1; k < j; k++) core[k] = 1;
+  }
+  return { target, core, slope, weight };
+}
+
+// Near junctions a road takes the other road's cross slope instead of its own banking,
+// and drops its crown; both ease back over ~50 m.
+function junctionCross(bank, crown, jn) {
+  const n = bank.length;
+  const FADE = 25;
+  // distance (samples) to the nearest core sample, and that sample's slope
+  const dist = new Float32Array(n).fill(1e9);
+  const src = new Float32Array(n);
+  for (let i = 0, last = -1; i < n; i++) {
+    if (jn.core[i]) last = i;
+    if (last >= 0 && i - last < dist[i]) {
+      dist[i] = i - last;
+      src[i] = jn.slope[last];
+    }
+  }
+  for (let i = n - 1, last = -1; i >= 0; i--) {
+    if (jn.core[i]) last = i;
+    if (last >= 0 && last - i < dist[i]) {
+      dist[i] = last - i;
+      src[i] = jn.slope[last];
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    if (dist[i] >= FADE) continue;
+    const t = dist[i] / FADE;
+    const w = 1 - t * t * (3 - 2 * t);
+    bank[i] += (src[i] - bank[i]) * w;
+    crown[i] *= 1 - w;
+  }
+}
+
+function imposeJunctions(h, jn) {
+  for (let i = 0; i < h.length; i++) if (jn.weight[i] > 0) h[i] += (jn.target[i] - h[i]) * jn.weight[i];
+}
+
+// Move the profile onto the junction targets: exact on core samples, then a C1 Hermite
+// fade along the road whose length grows with the height change (wmin..wmax samples).
+function applyJunctions(h, jn, wmin, wmax) {
+  const n = h.length;
+  const { target, core } = jn;
+  for (let pass = 0; pass < 2; pass++) {
+    let i = 0;
+    while (i < n) {
+      if (!core[i]) {
+        i++;
+        continue;
+      }
+      const a = i;
+      while (i + 1 < n && core[i + 1]) i++;
+      const b = i;
+      i++;
+      const d = (k) => target[k] - h[k];
+      const v0 = d(a),
+        v1 = d(b);
+      const m0 = b > a ? d(a + 1) - v0 : 0,
+        m1 = b > a ? v1 - d(b - 1) : 0;
+      for (let k = a; k <= b; k++) h[k] = target[k];
+      const W0 = Math.round(clamp(Math.abs(v0) * 25, wmin, wmax)),
+        W1 = Math.round(clamp(Math.abs(v1) * 25, wmin, wmax));
+      for (let k = 1; k <= W0 && a - k >= 0; k++) {
+        if (core[a - k]) break;
+        const t = k / W0;
+        h[a - k] += v0 * (2 * t * t * t - 3 * t * t + 1) - m0 * W0 * (t * t * t - 2 * t * t + t);
+      }
+      for (let k = 1; k <= W1 && b + k < n; k++) {
+        if (core[b + k]) break;
+        const t = k / W1;
+        h[b + k] += v1 * (2 * t * t * t - 3 * t * t + 1) + m1 * W1 * (t * t * t - 2 * t * t + t);
+      }
+    }
+  }
+}
+
+// Limit crest and sag sharpness. The greatest profile below h whose curvature stays above
+// -1/Rc is the lower convex hull of h + x^2/(2Rc), minus that parabola; sags are the mirror
+// image. Both leave compliant stretches untouched and never steepen a grade.
+function verticalCurves(h, ds, Rc, Rs, closed) {
+  const n = h.length;
+  const pad = closed ? Math.min(n, 800) : 0;
+  const m = n + pad * 2;
+  const y = new Float64Array(m);
+  const x = new Float64Array(m);
+  for (let k = 0; k < m; k++) {
+    y[k] = h[(((k - pad) % n) + n) % n];
+    x[k] = (k - m / 2) * ds;
+  }
+  const F = new Float64Array(m);
+  const hull = new Int32Array(m);
+  const envelope = (q, sign) => {
+    for (let k = 0; k < m; k++) F[k] = sign * y[k] + q * x[k] * x[k];
+    let top = 0;
+    for (let k = 0; k < m; k++) {
+      while (top >= 2) {
+        const a = hull[top - 2],
+          b = hull[top - 1];
+        // drop b if it lies on or above the chord a -> k
+        if ((F[b] - F[a]) * (x[k] - x[a]) >= (F[k] - F[a]) * (x[b] - x[a])) top--;
+        else break;
+      }
+      hull[top++] = k;
+    }
+    for (let s = 0; s < top - 1; s++) {
+      const a = hull[s],
+        b = hull[s + 1];
+      for (let k = a; k <= b; k++) {
+        const L = F[a] + ((F[b] - F[a]) * (x[k] - x[a])) / (x[b] - x[a]);
+        y[k] = sign * (L - q * x[k] * x[k]);
+      }
+    }
+  };
+  for (let pass = 0; pass < 2; pass++) {
+    envelope(1 / (2 * Rc), 1);
+    envelope(1 / (2 * Rs), -1);
+  }
+  for (let i = 0; i < n; i++) h[i] = y[i + pad];
+}
+
+// Vertical curves for a profile with fixed (junction) samples. Next to each fixed run the
+// free profile is squeezed into the funnel of heights reachable from the run's end with
+// its slope, the crest / sag radii and the grade limit; each free stretch then gets the
+// hull treatment with its fixed ends held, so junction approaches arrive already rounded.
+function shapeProfile(h, fixed, ds, Rc, Rs, g, closed) {
+  const n = h.length;
+  let first = -1;
+  for (let i = 0; i < n; i++)
+    if (fixed[i]) {
+      first = i;
+      break;
+    }
+  if (first < 0) {
+    verticalCurves(h, ds, Rc, Rs, closed);
+    return;
+  }
+  // closed roads: rotate so the array starts on a fixed sample
+  const off = closed ? first : 0;
+  const H = new Float64Array(n),
+    F = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    H[i] = h[(i + off) % n];
+    F[i] = fixed[(i + off) % n];
+  }
+  // bounds: a crest (sag) parabola leaving the run with its slope, continued as a straight
+  // line once its slope reaches the grade limit, so the funnel itself respects the grade
+  const bound = (hE, sE, x, R, sign) => {
+    const xg = (g + sign * sE) * R; // distance at which the parabola's slope hits -/+g
+    if (x <= xg) return hE + sE * x - (sign * x * x) / (2 * R);
+    return hE + sE * xg - (sign * xg * xg) / (2 * R) - sign * g * (x - xg);
+  };
+  const funnel = (E, dir, sE) => {
+    const hE = H[E];
+    for (let u = 1; u < 400; u++) {
+      const k = E + dir * u;
+      if (k < 0 || k >= n || F[k]) break;
+      const x = u * ds;
+      const lo = bound(hE, sE, x, Rc, 1);
+      const hi = bound(hE, sE, x, Rs, -1);
+      if (lo > hi) break;
+      H[k] = H[k] < lo ? lo : H[k] > hi ? hi : H[k];
+    }
+  };
+  for (let i = 0; i < n; i++) {
+    if (!F[i]) continue;
+    const runL = i === 0 || !F[i - 1],
+      runR = i === n - 1 || !F[i + 1];
+    // slope along the direction leaving the run (per metre)
+    if (runL && i > 0) funnel(i, -1, i + 1 < n && F[i + 1] ? (H[i] - H[i + 1]) / ds : 0);
+    if (runR && i < n - 1) funnel(i, 1, i > 0 && F[i - 1] ? (H[i] - H[i - 1]) / ds : 0);
+  }
+  // hull per free stretch, fixed neighbours included as held end points
+  let i = 0;
+  while (i < n) {
+    if (F[i]) {
+      i++;
+      continue;
+    }
+    const a = Math.max(0, i - 1);
+    while (i < n && !F[i]) i++;
+    const b = Math.min(n - 1, i);
+    if (b - a >= 2) {
+      const sub = H.subarray(a, b + 1);
+      const tmp = Float32Array.from(sub);
+      verticalCurves(tmp, ds, Rc, Rs, false);
+      for (let k = 1; k < tmp.length - 1; k++) sub[k] = tmp[k];
+      if (a === 0 && !F[0]) sub[0] = tmp[0];
+      if (b === n - 1 && !F[n - 1]) sub[b - a] = tmp[b - a];
+    }
+  }
+  for (let k = 0; k < n; k++) h[(k + off) % n] = H[k];
+}
+
+// Kicker height (0..1) at distance u (m) from the lip along the direction of travel:
+// a run-up whose slope grows toward the lip, then a smooth landing slope.
+function jumpProfile(u) {
+  const RUN = 30,
+    LAND = 24;
+  if (u <= -RUN || u >= LAND) return 0;
+  if (u <= 0) {
+    const t = (u + RUN) / RUN;
+    return t * t;
+  }
+  return 1 - smoothstep(0, LAND, u);
 }
 
 function segIntersect(ax, az, bx, bz, cx, cz, dx, dz) {
@@ -714,79 +1116,84 @@ export function generateWorld(opts = {}, progress = () => {}) {
   progress(0.45, 'Grading roads');
 
   // ------------------------------------------------------ height profiles
+  // Roads are graded in order. A later road adopts the surface of an earlier one wherever
+  // they meet, cross or run alongside each other, so junctions are level. Crest and sag
+  // radii are then limited so no crest unloads a car below the road's design speed.
   const roads = [];
+  const segGrid = new SegmentGrid(16);
+  const junctionZones = findJunctionZones(roadDefs);
   for (let ri = 0; ri < roadDefs.length; ri++) {
     const rd = roadDefs[ri];
     const p = rd.pts2;
     const n = p.length;
+    const hw = rd.width / 2;
     let h = new Float32Array(n);
     for (let i = 0; i < n; i++) h[i] = baseHF.height(p[i][0], p[i][1]);
-    const sigma = rd.kind === 'highway' ? 22 : rd.kind === 'street' || rd.kind === 'runway' ? 4 : 12;
-    h = smoothProfile(h, sigma, rd.closed);
+    const sigma = rd.kind === 'highway' ? 22 : rd.kind === 'street' || rd.kind === 'runway' ? 4 : rd.kind === 'dirt' ? 10 : 14;
     const g = rd.maxGrade ?? (rd.kind === 'highway' ? 0.06 : rd.kind === 'dirt' ? 0.16 : 0.1);
-    for (let i = 0; i < n; i++) h[i] = Math.max(h[i], 2.2);
-    limitGrade(h, 2, g, rd.closed);
-    h = smoothProfile(h, 3, rd.closed);
-    for (let i = 0; i < n; i++) h[i] = Math.max(h[i], 2.2);
-
-    // pins where we meet or cross earlier roads
-    const pins = [];
-    for (let rj = 0; rj < roads.length; rj++) {
-      const o = roads[rj];
-      const op = o.pts;
-      const on = op.length / 3;
-      // endpoints snapping
-      if (!rd.closed) {
-        for (const end of [0, n - 1]) {
-          let best = 1e18,
-            bi = -1;
-          for (let k = 0; k < on; k++) {
-            const dx = op[k * 3] - p[end][0],
-              dz = op[k * 3 + 2] - p[end][1];
-            const d2 = dx * dx + dz * dz;
-            if (d2 < best) {
-              best = d2;
-              bi = k;
-            }
-          }
-          if (best < 22 * 22) {
-            pins.push({ i: end, h: op[bi * 3 + 1] });
-          }
-        }
-      }
-      // crossings
-      for (let i = 0; i < n - 1; i++) {
-        const ax = p[i][0],
-          az = p[i][1],
-          bx = p[i + 1][0],
-          bz = p[i + 1][1];
-        for (let k = 0; k < on - 1 + (o.closed ? 1 : 0); k++) {
-          const k2 = (k + 1) % on;
-          const cx = op[k * 3],
-            cz = op[k * 3 + 2];
-          if (Math.abs(cx - ax) > 8 || Math.abs(cz - az) > 8) continue;
-          const r = segIntersect(ax, az, bx, bz, cx, cz, op[k2 * 3], op[k2 * 3 + 2]);
-          if (r) pins.push({ i: i + r[0], h: lerp(op[k * 3 + 1], op[k2 * 3 + 1], r[1]) });
-        }
-      }
+    // junction samples are fixed to the earlier road's surface while the rest is smoothed
+    // and grade-limited around them, so the approach is spread over as much road as needed
+    const junction = junctionTargets(p, hw, segGrid);
+    const fix = junction.core;
+    for (const sg of [sigma, sigma * 0.6, 3, 3]) {
+      imposeJunctions(h, junction);
+      h = smoothProfile(h, sg, rd.closed);
+      for (let i = 0; i < n; i++) h[i] = Math.max(h[i], 2.2);
+      imposeJunctions(h, junction);
+      limitGrade(h, 2, g, rd.closed, fix);
     }
-    for (const pin of pins) {
-      const i0 = Math.floor(pin.i);
-      const cur = lerp(h[clamp(i0, 0, n - 1)], h[clamp(i0 + 1, 0, n - 1)], pin.i - i0);
-      const delta = pin.h - cur;
-      const W = Math.round(clamp(Math.abs(delta) * 14, 30, 220)); // samples (2 m each)
-      for (let i = Math.max(0, i0 - W); i <= Math.min(n - 1, i0 + W); i++) {
-        const t = Math.abs(i - pin.i) / W;
-        if (t < 1) h[i] += delta * (0.5 + 0.5 * Math.cos(Math.PI * t));
-      }
-    }
+    const [Rc, Rs] = VCURVE[rd.name] || VCURVE_KIND[rd.kind] || VCURVE_KIND.road;
+    shapeProfile(h, fix, 2, Rc, Rs, g, rd.closed);
+    for (let i = 0; i < n; i++) h[i] = Math.max(h[i], 2.2);
+    limitGrade(h, 2, g, rd.closed, fix);
     const pts = new Float32Array(n * 3);
     for (let i = 0; i < n; i++) {
       pts[i * 3] = p[i][0];
       pts[i * 3 + 1] = h[i];
       pts[i * 3 + 2] = p[i][1];
     }
-    roads.push({ id: ri, name: rd.name, kind: rd.kind, width: rd.width, closed: rd.closed, pts });
+    const bank = computeBank(pts, rd.closed, rd.kind);
+    const crown = new Float32Array(n).fill(1);
+    // intersections are graded flat: no banking and little crown where roads meet
+    const jz = junctionZones[ri];
+    for (let i = 0; i < n; i++) {
+      bank[i] *= 1 - jz[i];
+      crown[i] *= 1 - 0.7 * jz[i];
+    }
+    junctionCross(bank, crown, junction);
+    const road = { id: ri, name: rd.name, kind: rd.kind, width: rd.width, closed: rd.closed, pts, bank, crown };
+    roads.push(road);
+    segGrid.addRoad(road);
+  }
+  // danger-sign jumps: kickers on the dirt trails (part of the road profile, so the drawn
+  // ribbon, the physics surface and the carved terrain all include them) and in open fields
+  const jumpDefs = [
+    { road: 'Selva Trail', frac: 0.62, side: 0, name: 'Selva Danger Sign', H: 2.6 },
+    { road: 'Costa Dirt', frac: 0.5, side: 0, name: 'Costa Danger Sign', H: 2.4 },
+    { road: 'Via Central', frac: 0.3, side: 34, name: 'Granja Danger Sign', H: 3.2 },
+    { road: 'Autopista Isla', frac: 0.62, side: -40, name: 'Llanura Danger Sign', H: 3.4 },
+  ];
+  const jumps = [];
+  const fieldJumps = [];
+  for (const d of jumpDefs) {
+    const road = roads.find((r) => r.name === d.road);
+    if (!road) continue;
+    const rn = road.pts.length / 3;
+    const i = Math.floor(rn * d.frac);
+    const a = Math.max(0, i - 2),
+      b = Math.min(rn - 1, i + 2);
+    let dx = road.pts[b * 3] - road.pts[a * 3],
+      dz = road.pts[b * 3 + 2] - road.pts[a * 3 + 2];
+    const l = Math.hypot(dx, dz) || 1;
+    dx /= l;
+    dz /= l;
+    const j = { x: road.pts[i * 3] - dz * d.side, z: road.pts[i * 3 + 2] + dx * d.side, dx, dz };
+    if (d.side === 0) {
+      // follow the road: add the kicker to the centre-line heights, measured along the road
+      for (let k = Math.max(0, i - 20); k <= Math.min(rn - 1, i + 15); k++) road.pts[k * 3 + 1] += d.H * jumpProfile((k - i) * 2);
+      road.bank.fill(0, Math.max(0, i - 25), Math.min(rn, i + 20));
+    } else fieldJumps.push({ ...j, H: d.H });
+    jumps.push({ name: d.name, x: j.x - j.dx * 45, z: j.z - j.dz * 45, dx: j.dx, dz: j.dz, lip: { x: j.x, z: j.z }, road: d.side === 0 ? road.id : -1, s: i * 2 });
   }
   progress(0.55, 'Carving terrain');
 
@@ -805,6 +1212,8 @@ export function generateWorld(opts = {}, progress = () => {}) {
     const n = pts.length / 3;
     const segs = rd.closed ? n : n - 1;
     const hw = rd.width / 2;
+    const bank = rd.bank;
+    const crown = rd.crown;
     for (let i = 0; i < segs; i++) {
       const j = (i + 1) % n;
       const ax = pts[i * 3],
@@ -813,6 +1222,10 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const bx = pts[j * 3],
         bh = pts[j * 3 + 1],
         bz = pts[j * 3 + 2];
+      const ba = bank[i],
+        bb = bank[j],
+        ca = crown[i],
+        cb = crown[j];
       const minX = Math.min(ax, bx) - MAXR,
         maxX = Math.max(ax, bx) + MAXR;
       const minZ = Math.min(az, bz) - MAXR,
@@ -824,6 +1237,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const dx = bx - ax,
         dz = bz - az;
       const len2 = dx * dx + dz * dz || 1e-9;
+      const invLen = 1 / Math.sqrt(len2);
       const sArc = i * 2;
       for (let iz = iz0; iz <= iz1; iz++) {
         const z = iz * CELL - HALF;
@@ -836,8 +1250,18 @@ export function generateWorld(opts = {}, progress = () => {}) {
           const d = Math.sqrt(ex * ex + ez * ez) - hw; // distance from road edge
           if (d > MAXR - hw) continue;
           const v = iz * S + ix;
-          const hh = ah + (bh - ah) * t;
+          // the terrain is the road surface: profile plus crown / banking across it
+          const lat = (ex * dz - ez * dx) * invLen;
+          const hh = ah + (bh - ah) * t + crossOffset(rd.kind, hw, ba + (bb - ba) * t, lat, ca + (cb - ca) * t);
           const s = sArc + t * 2;
+          // on an earlier road's carriageway that road's surface wins (junctions stay level)
+          if (best1r[v] >= 0 && best1r[v] !== rd.id && best1[v] < 0) {
+            if (d < best2[v]) {
+              best2[v] = d;
+              best2h[v] = hh;
+            }
+            continue;
+          }
           if (d < best1[v]) {
             const same = best1r[v] === rd.id && Math.abs(s - best1s[v]) < 60;
             if (!same && best1r[v] >= 0) {
@@ -876,36 +1300,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
     h = lerp(h, best1h[v], w1);
     heights[v] = h;
   }
-  // danger-sign jumps: kickers sculpted into dirt trails and open fields
-  const jumps = [];
-  {
-    const byName = (n) => roads.find((r) => r.name === n);
-    const at = (road, frac, side) => {
-      const n = road.pts.length / 3;
-      const i = Math.floor(n * frac);
-      const a = Math.max(0, i - 2),
-        b = Math.min(n - 1, i + 2);
-      let dx = road.pts[b * 3] - road.pts[a * 3],
-        dz = road.pts[b * 3 + 2] - road.pts[a * 3 + 2];
-      const l = Math.hypot(dx, dz) || 1;
-      dx /= l;
-      dz /= l;
-      return { x: road.pts[i * 3] - dz * side, z: road.pts[i * 3 + 2] + dx * side, dx, dz };
-    };
-    const defs = [
-      { road: 'Selva Trail', frac: 0.62, side: 0, name: 'Selva Danger Sign', H: 2.6 },
-      { road: 'Costa Dirt', frac: 0.5, side: 0, name: 'Costa Danger Sign', H: 2.4 },
-      { road: 'Via Central', frac: 0.3, side: 34, name: 'Granja Danger Sign', H: 3.2 },
-      { road: 'Autopista Isla', frac: 0.62, side: -40, name: 'Llanura Danger Sign', H: 3.4 },
-    ];
-    for (const d of defs) {
-      const road = byName(d.road);
-      if (!road) continue;
-      const j = at(road, d.frac, d.side);
-      sculptJump(heights, j.x, j.z, j.dx, j.dz, d.H, d.side === 0 ? 5.5 : 8);
-      jumps.push({ name: d.name, x: j.x - j.dx * 45, z: j.z - j.dz * 45, dx: j.dx, dz: j.dz, lip: { x: j.x, z: j.z } });
-    }
-  }
+  for (const j of fieldJumps) sculptJump(heights, j.x, j.z, j.dx, j.dz, j.H, 8);
   const hf = new HeightField(heights, RES, SIZE);
   progress(0.66, 'Painting the land');
 
@@ -1235,7 +1630,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   };
 }
 
-// ramp rising along (dx,dz) to a lip at (cx,cz), then dropping away steeply
+// field kicker rising along (dx,dz) to a lip at (cx,cz) (see jumpProfile)
 function sculptJump(arr, cx, cz, dx, dz, H, halfW) {
   const R = 40;
   const ix0 = Math.max(0, Math.floor((cx - R + HALF) / CELL)),
@@ -1248,10 +1643,7 @@ function sculptJump(arr, cx, cz, dx, dz, H, halfW) {
         z = iz * CELL - HALF - cz;
       const u = x * dx + z * dz;
       const v = -x * dz + z * dx;
-      let add = 0;
-      if (u > -22 && u <= 0) add = H * Math.pow(smoothstep(-22, 0, u), 1.4);
-      else if (u > 0 && u < 5) add = H * Math.pow(1 - u / 5, 2.2);
-      add *= 1 - smoothstep(halfW, halfW + 5, Math.abs(v));
+      const add = H * jumpProfile(u) * (1 - smoothstep(halfW, halfW + 6, Math.abs(v)));
       arr[iz * S + ix] += add;
     }
 }

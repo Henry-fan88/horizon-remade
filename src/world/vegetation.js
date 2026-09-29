@@ -7,6 +7,7 @@ import { mulberry32 } from '../core/math.js';
 import { makeFoliageTexture, makeFoliageBark } from './foliage-textures.js';
 import { getSurfaceAssets } from './surface-assets.js';
 import { atmo } from './sky.js';
+import { useFarShadow } from '../render/farshadow.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -423,6 +424,8 @@ export class Vegetation {
       cactus: new THREE.MeshStandardMaterial({ color: 0x4f7a3a, roughness: 0.7 }),
       rock: rockMaterial(),
     };
+    // distant mountains and forests shade the trees too
+    for (const m of Object.values(this.materials)) for (const x of Array.isArray(m) ? m : [m]) useFarShadow(x);
     const builders = {
       broadleaf: (s, l) => buildBroadleaf(s, false, l),
       birch: (s, l) => buildBroadleaf(s, true, l),
@@ -535,10 +538,9 @@ export class Vegetation {
         if (d2 < near2) { mesh.setMatrixAt(c, _m); mesh.setColorAt(c++, _tint); }
         else { far.setMatrixAt(cf, _m); far.setColorAt(cf++, _tint); }
       }
-      for (const [m, cnt] of [
-        [mesh, c],
-        [far, cf],
-      ]) {
+      for (let pass = 0; pass < 2; pass++) {
+        const m = pass ? far : mesh,
+          cnt = pass ? cf : c;
         m.count = cnt;
         m.instanceMatrix.needsUpdate = true;
         if (m.instanceColor) m.instanceColor.needsUpdate = true;

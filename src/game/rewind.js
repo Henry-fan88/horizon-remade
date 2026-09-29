@@ -1,21 +1,32 @@
 // Rewind: ring buffer of vehicle states (player + race AI) sampled at 30 Hz.
+import * as THREE from 'three';
 const HZ = 30;
 const SECONDS = 12;
 const CAP = HZ * SECONDS;
 
-function snapVehicle(v) {
+// Snapshots are preallocated and overwritten in place (the buffer fills 30 times a second).
+function makeSnap() {
+  return { v: null, pos: new THREE.Vector3(), quat: new THREE.Quaternion(), vel: new THREE.Vector3(), angVel: new THREE.Vector3(), rpm: 0, gear: 1, steer: 0, wheels: [new Float32Array(3), new Float32Array(3), new Float32Array(3), new Float32Array(3)], damage: { front: 0, rear: 0, left: 0, right: 0 } };
+}
+
+function snapVehicle(v, s) {
   const p = v.physics;
-  return {
-    v,
-    pos: p.pos.clone(),
-    quat: p.quat.clone(),
-    vel: p.vel.clone(),
-    angVel: p.angVel.clone(),
-    rpm: p.rpm,
-    gear: p.gear,
-    steer: p.steerAngle,
-    wheels: p.wheels.map((w) => [w.compression, w.omega, w.angle]),
-  };
+  s.v = v;
+  s.pos.copy(p.pos);
+  s.quat.copy(p.quat);
+  s.vel.copy(p.vel);
+  s.angVel.copy(p.angVel);
+  s.rpm = p.rpm;
+  s.gear = p.gear;
+  s.steer = p.steerAngle;
+  for (let i = 0; i < 4; i++) {
+    const w = p.wheels[i];
+    s.wheels[i][0] = w.compression;
+    s.wheels[i][1] = w.omega;
+    s.wheels[i][2] = w.angle;
+  }
+  Object.assign(s.damage, p.damage);
+  return s;
 }
 
 function applyVehicle(s) {
@@ -27,11 +38,14 @@ function applyVehicle(s) {
   p.rpm = s.rpm;
   p.gear = s.gear;
   p.steerAngle = s.steer;
-  s.wheels.forEach((w, i) => {
+  for (let i = 0; i < 4; i++) {
+    const w = s.wheels[i];
     p.wheels[i].compression = p.wheels[i].prevCompression = w[0];
     p.wheels[i].omega = w[1];
     p.wheels[i].angle = w[2];
-  });
+  }
+  Object.assign(p.damage, s.damage);
+  p.updateDamageEffects();
   s.v.saveState();
 }
 
@@ -62,13 +76,30 @@ export class Rewind {
     this.acc = 0;
     const g = this.game;
     const race = g.race.active;
-    const frame = { vehicles: [snapVehicle(g.player)], raceTime: race ? race.raceTime : 0, racers: null };
+    const frame = this.buf[this.head] || (this.buf[this.head] = { vehicles: [], snaps: [], raceTime: 0, racers: null, racerPool: [], racerObjs: [], nextCp: 0 });
+    frame.vehicles.length = 0;
+    const snap = (v) => {
+      const k = frame.vehicles.length;
+      frame.vehicles.push(snapVehicle(v, frame.snaps[k] || (frame.snaps[k] = makeSnap())));
+    };
+    snap(g.player);
+    frame.raceTime = race ? race.raceTime : 0;
+    frame.racers = null;
     if (race && race.state === 'racing') {
-      for (const r of race.racers) if (!r.isPlayer) frame.vehicles.push(snapVehicle(r.v));
-      frame.racers = race.racers.map((r) => ({ r, dist: r.dist, hint: r.hint, lap: r.lap, finished: r.finished }));
+      for (const r of race.racers) if (!r.isPlayer) snap(r.v);
+      frame.racers = frame.racerPool;
+      frame.racers.length = 0;
+      race.racers.forEach((r, k) => {
+        const o = frame.racerObjs[k] || (frame.racerObjs[k] = {});
+        o.r = r;
+        o.dist = r.dist;
+        o.hint = r.hint;
+        o.lap = r.lap;
+        o.finished = r.finished;
+        frame.racers.push(o);
+      });
       frame.nextCp = race.nextCp;
     }
-    this.buf[this.head] = frame;
     this.head = (this.head + 1) % CAP;
     this.size = Math.min(CAP, this.size + 1);
   }

@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { getSurfaceAssets } from './surface-assets.js';
 import { SURF } from './worldgen.js';
+import { useFarShadow } from '../render/farshadow.js';
 
 const CHUNK = 64;
 const STEPS = [1, 2, 4, 8];
@@ -307,7 +308,7 @@ export class Terrain {
     this.n = this.res / CHUNK;
     this.group = new THREE.Group();
     this.group.name = 'terrain';
-    this.material = createTerrainMaterial(detailTex, world, hf);
+    this.material = useFarShadow(createTerrainMaterial(detailTex, world, hf));
     this.depthMaterial = createTerrainDepthMaterial();
     this.normals = this.computeNormals();
     this.chunks = [];

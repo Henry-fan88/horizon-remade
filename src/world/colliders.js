@@ -1,5 +1,8 @@
-// Static collision world (trees, rocks, buildings, rails) + smashable props,
-// with impulse-based responses for vehicles (2.5D: oriented boxes in XZ + height ranges).
+// Static collision world (trees, rocks, buildings, rails) + smashable props, with impulse
+// responses for vehicles. A car is a rounded box (an inner box plus a radius) that follows
+// the body's full orientation, so contacts happen at the bumper or sill that actually hits,
+// at its real height, and pitch / roll the car as well as yawing it.
+// Statics are vertical cylinders (trees, poles) and vertical prisms (buildings, rails).
 import * as THREE from 'three';
 import { clamp } from '../core/math.js';
 
@@ -7,12 +10,253 @@ const CELL = 8;
 const _n = new THREE.Vector3();
 const _p = new THREE.Vector3();
 const _r = new THREE.Vector3();
+const _r2 = new THREE.Vector3();
 const _v = new THREE.Vector3();
+const _vb = new THREE.Vector3();
 const _t = new THREE.Vector3();
 const _J = new THREE.Vector3();
-const _fwd = new THREE.Vector3();
-const _left = new THREE.Vector3();
+const _a = new THREE.Vector3();
+const _b = new THREE.Vector3();
 const _c = new THREE.Vector3();
+const _d = new THREE.Vector3();
+
+// ------------------------------------------------------------------ car shape
+// Rounded box of a body: centre (world), rotation, inner half extents, radius.
+export class CarShape {
+  constructor() {
+    this.c = new THREE.Vector3();
+    this.q = new THREE.Quaternion();
+    this.qi = new THREE.Quaternion();
+    this.e = new THREE.Vector3();
+    this.R = 0.25;
+    this.bound = 3;
+    // sample points on the inner box (local): corners, edge midpoints, quarter points on the
+    // long edges and face centres; each carries the rounding radius
+    this.samples = [];
+    this.world = [];
+  }
+
+  update(phys) {
+    const he = phys.halfExtents;
+    const R = Math.min(0.3, he.x * 0.3, he.y * 0.8);
+    this.R = R;
+    this.e.set(Math.max(0.05, he.x - R), Math.max(0.05, he.y - R), Math.max(0.05, he.z - R));
+    this.q.copy(phys.quat);
+    this.qi.copy(phys.quat).invert();
+    this.c.copy(phys.boxCenterLocal).applyQuaternion(this.q).add(phys.pos);
+    this.bound = this.e.length() + R;
+    if (this.samples.length === 0) {
+      for (const x of [-1, 0, 1])
+        for (const y of [-1, 0, 1])
+          for (const z of [-1, -0.5, 0, 0.5, 1]) {
+            const k = (x !== 0) + (y !== 0) + (z !== 0);
+            if (!(k >= 2 || (k === 1 && y === 0))) continue;
+            // the roof is shorter than the body: pull the top front/rear points in, so a
+            // nose or tail hit lands at bumper height rather than on a phantom roof corner
+            this.samples.push(new THREE.Vector3(x, y, y === 1 && Math.abs(z) === 1 ? z * 0.55 : z));
+          }
+      for (let i = 0; i < this.samples.length; i++) this.world.push(new THREE.Vector3());
+    }
+    const e = this.e;
+    for (let i = 0; i < this.samples.length; i++) {
+      const s = this.samples[i];
+      this.world[i].set(s.x * e.x, s.y * e.y, s.z * e.z).applyQuaternion(this.q).add(this.c);
+    }
+    return this;
+  }
+
+  toLocal(p, out) {
+    return out.subVectors(p, this.c).applyQuaternion(this.qi);
+  }
+
+  toWorldDir(v, out) {
+    return out.copy(v).applyQuaternion(this.q);
+  }
+}
+
+const _shapeA = new CarShape();
+const _shapeB = new CarShape();
+const _hit = { depth: 0, n: new THREE.Vector3(), p: new THREE.Vector3() };
+const _hit2 = { depth: 0, n: new THREE.Vector3(), p: new THREE.Vector3() };
+const _pairN = new THREE.Vector3();
+const _depths = new Float32Array(64);
+
+// closest points between segment [A,B] (local space) and the box |x| <= e; writes the
+// segment point into P and box point into Q, returns the distance
+function segmentBox(A, B, e, P, Q, t0 = 0.5) {
+  let t = t0;
+  const dx = B.x - A.x,
+    dy = B.y - A.y,
+    dz = B.z - A.z;
+  const L2 = dx * dx + dy * dy + dz * dz || 1e-9;
+  for (let it = 0; it < 6; it++) {
+    P.set(A.x + dx * t, A.y + dy * t, A.z + dz * t);
+    Q.set(clamp(P.x, -e.x, e.x), clamp(P.y, -e.y, e.y), clamp(P.z, -e.z, e.z));
+    t = clamp(((Q.x - A.x) * dx + (Q.y - A.y) * dy + (Q.z - A.z) * dz) / L2, 0, 1);
+  }
+  P.set(A.x + dx * t, A.y + dy * t, A.z + dz * t);
+  Q.set(clamp(P.x, -e.x, e.x), clamp(P.y, -e.y, e.y), clamp(P.z, -e.z, e.z));
+  return Math.hypot(P.x - Q.x, P.y - Q.y, P.z - Q.z);
+}
+
+// Car (rounded box) vs vertical cylinder at (x, z) radius r spanning y0..y1.
+function carVsCylinder(sh, x, z, r, y0, y1, hit) {
+  _a.set(x, y0, z);
+  _b.set(x, y1, z);
+  sh.toLocal(_a, _a);
+  sh.toLocal(_b, _b);
+  // start the search at bumper height so a flat face meets a trunk there, not at the roof
+  const t0 = clamp((sh.c.y - sh.e.y * 0.5 - y0) / Math.max(1e-3, y1 - y0), 0, 1);
+  const d = segmentBox(_a, _b, sh.e, _c, _d, t0); // _c on axis, _d on inner box (local)
+  const reach = r + sh.R;
+  if (d >= reach) return null;
+  if (d > 1e-6) {
+    // normal from the obstacle toward the car, in local space
+    _n.set(_d.x - _c.x, _d.y - _c.y, _d.z - _c.z).divideScalar(d);
+    hit.depth = reach - d;
+  } else {
+    // the axis passes through the inner box: push out through the nearest side (x or z)
+    const px = sh.e.x - Math.abs(_c.x),
+      pz = sh.e.z - Math.abs(_c.z);
+    if (px < pz) _n.set(_c.x > 0 ? -1 : 1, 0, 0);
+    else _n.set(0, 0, _c.z > 0 ? -1 : 1);
+    hit.depth = reach + Math.min(px, pz);
+  }
+  sh.toWorldDir(_n, hit.n);
+  // contact point: on the car's surface
+  hit.p.copy(_d).addScaledVector(_n, -sh.R).applyQuaternion(sh.q).add(sh.c);
+  return hit;
+}
+
+// Car vs vertical prism: centre (x, z), half extents hx (along (c, s)) and hz, y0..y1.
+function carVsPrism(sh, st, hit) {
+  let best = 0;
+  const c = st.c,
+    s = st.s;
+  // depths of all samples first, so ties (a flat face against a wall) average to the
+  // middle of the contact patch instead of one corner
+  const depths = _depths;
+  depths.fill(-1);
+  // 1) sample points of the car against the prism
+  for (let i = 0; i < sh.world.length; i++) {
+    const P = sh.world[i];
+    const dx = P.x - st.x,
+      dz = P.z - st.z;
+    const u = dx * c + dz * s,
+      v = -dx * s + dz * c;
+    const qu = clamp(u, -st.hx, st.hx),
+      qv = clamp(v, -st.hz, st.hz),
+      qy = clamp(P.y, st.y0, st.y1);
+    const eu = u - qu,
+      ev = v - qv,
+      ey = P.y - qy;
+    const d2 = eu * eu + ev * ev + ey * ey;
+    let depth, nu, nv, ny;
+    if (d2 > 1e-10) {
+      const d = Math.sqrt(d2);
+      depth = sh.R - d;
+      depths[i] = depth;
+      if (depth <= best) continue;
+      nu = eu / d;
+      nv = ev / d;
+      ny = ey / d;
+    } else {
+      // sample point inside the prism: leave through the nearest face
+      const fu = st.hx - Math.abs(u),
+        fv = st.hz - Math.abs(v),
+        fy = Math.min(P.y - st.y0, st.y1 - P.y);
+      const m = Math.min(fu, fv, fy);
+      depth = sh.R + m;
+      depths[i] = depth;
+      if (depth <= best) continue;
+      nu = nv = ny = 0;
+      if (m === fu) nu = u >= 0 ? 1 : -1;
+      else if (m === fv) nv = v >= 0 ? 1 : -1;
+      else ny = P.y - st.y0 < st.y1 - P.y ? -1 : 1;
+    }
+    best = depth;
+    hit.depth = depth;
+    hit.n.set(nu * c - nv * s, ny, nu * s + nv * c);
+  }
+  if (best > 0) {
+    let cnt = 0;
+    hit.p.set(0, 0, 0);
+    for (let i = 0; i < sh.world.length; i++)
+      if (depths[i] > best - 0.02) {
+        hit.p.add(sh.world[i]);
+        cnt++;
+      }
+    hit.p.divideScalar(cnt).addScaledVector(hit.n, -sh.R);
+  }
+  // 2) the prism's vertical edges against the car (a corner poking into a flank)
+  for (const cu of [-1, 1])
+    for (const cv of [-1, 1]) {
+      const ex = st.x + cu * st.hx * c - cv * st.hz * s,
+        ez = st.z + cu * st.hx * s + cv * st.hz * c;
+      _a.set(ex, st.y0, ez);
+      _b.set(ex, st.y1, ez);
+      sh.toLocal(_a, _a);
+      sh.toLocal(_b, _b);
+      const d = segmentBox(_a, _b, sh.e, _c, _d, clamp((sh.c.y - sh.e.y * 0.5 - st.y0) / Math.max(1e-3, st.y1 - st.y0), 0, 1));
+      if (d >= sh.R) continue;
+      let depth;
+      if (d > 1e-6) {
+        depth = sh.R - d;
+        _n.set(_d.x - _c.x, _d.y - _c.y, _d.z - _c.z).divideScalar(d);
+      } else {
+        const px = sh.e.x - Math.abs(_c.x),
+          pz = sh.e.z - Math.abs(_c.z);
+        if (px < pz) _n.set(_c.x > 0 ? -1 : 1, 0, 0);
+        else _n.set(0, 0, _c.z > 0 ? -1 : 1);
+        depth = sh.R + Math.min(px, pz);
+      }
+      if (depth <= best) continue;
+      best = depth;
+      hit.depth = depth;
+      sh.toWorldDir(_n, hit.n);
+      hit.p.copy(_d).addScaledVector(_n, -sh.R).applyQuaternion(sh.q).add(sh.c);
+    }
+  return best > 0 ? hit : null;
+}
+
+// Car B (rounded box) vs sample points of car A. Normal points from B toward A.
+function samplesVsCar(A, B, hit, best) {
+  const e = B.e;
+  const reach = A.R + B.R;
+  for (let i = 0; i < A.world.length; i++) {
+    B.toLocal(A.world[i], _a);
+    const qx = clamp(_a.x, -e.x, e.x),
+      qy = clamp(_a.y, -e.y, e.y),
+      qz = clamp(_a.z, -e.z, e.z);
+    const dx = _a.x - qx,
+      dy = _a.y - qy,
+      dz = _a.z - qz;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    let depth;
+    if (d2 > 1e-10) {
+      const d = Math.sqrt(d2);
+      depth = reach - d;
+      if (depth <= best) continue;
+      _n.set(dx / d, dy / d, dz / d);
+    } else {
+      const fx = e.x - Math.abs(_a.x),
+        fy = e.y - Math.abs(_a.y),
+        fz = e.z - Math.abs(_a.z);
+      const m = Math.min(fx, fy, fz);
+      depth = reach + m;
+      if (depth <= best) continue;
+      if (m === fx) _n.set(_a.x > 0 ? 1 : -1, 0, 0);
+      else if (m === fz) _n.set(0, 0, _a.z > 0 ? 1 : -1);
+      else _n.set(0, _a.y > 0 ? 1 : -1, 0);
+    }
+    best = depth;
+    hit.depth = depth;
+    B.toWorldDir(_n, hit.n);
+    // midway between the two surfaces
+    hit.p.set(qx, qy, qz).addScaledVector(_n, B.R + (reach - depth - B.R - A.R) * 0.5).applyQuaternion(B.q).add(B.c);
+  }
+  return best;
+}
 
 export class CollisionWorld {
   constructor() {
@@ -21,6 +265,9 @@ export class CollisionWorld {
     this.smash = [];
     this.smashGrid = new Map();
     this.onSmash = null;
+    this._cand = [];
+    this._scand = [];
+    this._stamp = 1;
   }
 
   key(cx, cz) {
@@ -43,7 +290,7 @@ export class CollisionWorld {
 
   addCircle(x, z, r, y0, y1, kind = 'tree') {
     const idx = this.statics.length;
-    this.statics.push({ type: 0, x, z, r, y0, y1, kind });
+    this.statics.push({ type: 0, x, z, r, y0, y1, kind, seen: 0 });
     this.insert(this.grid, idx, x - r, z - r, x + r, z + r);
   }
 
@@ -51,14 +298,18 @@ export class CollisionWorld {
     const idx = this.statics.length;
     const c = Math.cos(rot),
       s = Math.sin(rot);
-    this.statics.push({ type: 1, x, z, hx, hz, c, s, y0, y1, kind });
+    this.statics.push({ type: 1, x, z, hx, hz, c, s, y0, y1, kind, seen: 0 });
     const R = Math.hypot(hx, hz);
     this.insert(this.grid, idx, x - R, z - R, x + R, z + R);
   }
 
+  // a rail: a thin wall along the segment (stored as a prism)
   addSegment(x1, z1, x2, z2, r, y0, y1, kind = 'rail') {
+    const len = Math.hypot(x2 - x1, z2 - z1) || 1e-3;
+    const c = (x2 - x1) / len,
+      s = (z2 - z1) / len;
     const idx = this.statics.length;
-    this.statics.push({ type: 2, x1, z1, x2, z2, r, y0, y1, kind });
+    this.statics.push({ type: 1, x: (x1 + x2) / 2, z: (z1 + z2) / 2, hx: len / 2 + r, hz: r, c, s, y0, y1, kind, seen: 0 });
     this.insert(this.grid, idx, Math.min(x1, x2) - r, Math.min(z1, z2) - r, Math.max(x1, x2) + r, Math.max(z1, z2) + r);
   }
 
@@ -66,13 +317,16 @@ export class CollisionWorld {
     // obj: { x, z, r, y, kind, alive, onSmash? }
     const idx = this.smash.length;
     obj.alive = true;
+    obj.seen = 0;
     this.smash.push(obj);
     this.insert(this.smashGrid, idx, obj.x - obj.r, obj.z - obj.r, obj.x + obj.r, obj.z + obj.r);
     return idx;
   }
 
-  query(grid, x, z, r, out) {
+  // candidate indices near (x, z); each index once (stamped, no allocation)
+  query(grid, list, x, z, r, out) {
     out.length = 0;
+    const stamp = ++this._stamp;
     const x0 = Math.floor((x - r) / CELL),
       x1 = Math.floor((x + r) / CELL);
     const z0 = Math.floor((z - r) / CELL),
@@ -80,35 +334,40 @@ export class CollisionWorld {
     for (let cz = z0; cz <= z1; cz++)
       for (let cx = x0; cx <= x1; cx++) {
         const a = grid.get(this.key(cx, cz));
-        if (a) for (const i of a) if (!out.includes(i)) out.push(i);
+        if (!a) continue;
+        for (let k = 0; k < a.length; k++) {
+          const o = list[a[k]];
+          if (o.seen === stamp) continue;
+          o.seen = stamp;
+          out.push(a[k]);
+        }
       }
     return out;
   }
 
   // Resolve a vehicle against static geometry. Returns max impact speed (m/s).
   resolveVehicle(phys) {
-    const box = vehicleBox(phys);
-    const cand = this.query(this.grid, box.cx, box.cz, box.R, this._cand || (this._cand = []));
+    const sh = _shapeA.update(phys);
+    const cand = this.query(this.grid, this.statics, sh.c.x, sh.c.z, sh.bound + 1, this._cand);
     let impact = 0;
     for (const i of cand) {
       const s = this.statics[i];
-      if (box.y1 < s.y0 || box.y0 > s.y1) continue;
-      let hit = null;
-      if (s.type === 0) hit = circleVsBox(s.x, s.z, s.r, box);
-      else if (s.type === 1) hit = obbVsBox(s, box);
-      else if (s.type === 2) hit = segmentVsBox(s, box);
+      if (sh.c.y + sh.bound < s.y0 || sh.c.y - sh.bound > s.y1) continue;
+      const hit = s.type === 0 ? carVsCylinder(sh, s.x, s.z, s.r, s.y0, s.y1, _hit) : carVsPrism(sh, s, _hit);
       if (hit) {
-        const imp = respond(phys, hit, box, s.kind === 'rail' ? 0.12 : 0.18, s.kind === 'rail' ? 0.18 : 0.5);
+        const soft = s.kind === 'rail' || s.kind === 'pole';
+        const imp = respond(phys, hit, soft ? 0.12 : 0.2, soft ? 0.22 : 0.45);
         impact = Math.max(impact, imp);
+        sh.update(phys);
       }
     }
-    // smashables
-    const sc = this.query(this.smashGrid, box.cx, box.cz, box.R, this._scand || (this._scand = []));
+    // smashables (signs, fences, bushes, boards): knocked flat by the car's footprint
+    const sc = this.query(this.smashGrid, this.smash, sh.c.x, sh.c.z, sh.bound + 1, this._scand);
     for (const i of sc) {
       const o = this.smash[i];
       if (!o.alive) continue;
-      if (Math.abs(o.y - box.cy) > 4) continue;
-      if (circleVsBox(o.x, o.z, o.r, box)) {
+      if (Math.abs(o.y - sh.c.y) > 4) continue;
+      if (carVsCylinder(sh, o.x, o.z, o.r, o.y - 1, o.y + 3, _hit)) {
         o.alive = false;
         const sp = phys.vel.length();
         phys.vel.multiplyScalar(o.mass ? clamp(1 - o.mass / (phys.mass * 4), 0.85, 0.995) : 0.985);
@@ -119,138 +378,32 @@ export class CollisionWorld {
   }
 }
 
-// Car footprint (XZ OBB) + vertical range
+// Kept for callers that want the old footprint description.
 export function vehicleBox(phys) {
-  _fwd.set(0, 0, 1).applyQuaternion(phys.quat);
-  _fwd.y = 0;
-  if (_fwd.lengthSq() < 1e-4) _fwd.set(0, 0, 1);
-  _fwd.normalize();
-  _c.copy(phys.boxCenterLocal).applyQuaternion(phys.quat).add(phys.pos);
-  const he = phys.halfExtents;
-  return {
-    cx: _c.x,
-    cy: _c.y,
-    cz: _c.z,
-    fx: _fwd.x,
-    fz: _fwd.z,
-    lx: _fwd.z,
-    lz: -_fwd.x,
-    hl: he.z,
-    hw: he.x,
-    y0: _c.y - he.y,
-    y1: _c.y + he.y,
-    R: Math.hypot(he.x, he.z) + 1,
-  };
+  const sh = _shapeA.update(phys);
+  return { cx: sh.c.x, cy: sh.c.y, cz: sh.c.z, R: sh.bound };
 }
 
-// circle (static) vs car box. Returns { nx, nz, depth, px, pz } with n pointing from obstacle to car.
-function circleVsBox(x, z, r, b) {
-  const dx = x - b.cx,
-    dz = z - b.cz;
-  const lx = dx * b.lx + dz * b.lz; // along car's left
-  const lz = dx * b.fx + dz * b.fz; // along car's forward
-  const qx = clamp(lx, -b.hw, b.hw),
-    qz = clamp(lz, -b.hl, b.hl);
-  const ex = lx - qx,
-    ez = lz - qz;
-  const d2 = ex * ex + ez * ez;
-  if (d2 > r * r) return null;
-  let nlx, nlz, depth;
-  if (d2 > 1e-8) {
-    const d = Math.sqrt(d2);
-    nlx = -ex / d;
-    nlz = -ez / d;
-    depth = r - d;
-  } else {
-    const px = b.hw - Math.abs(lx),
-      pz = b.hl - Math.abs(lz);
-    if (px < pz) {
-      nlx = lx > 0 ? -1 : 1;
-      nlz = 0;
-      depth = px + r;
-    } else {
-      nlx = 0;
-      nlz = lz > 0 ? -1 : 1;
-      depth = pz + r;
-    }
-  }
-  return {
-    nx: nlx * b.lx + nlz * b.fx,
-    nz: nlx * b.lz + nlz * b.fz,
-    depth,
-    px: b.cx + qx * b.lx + qz * b.fx,
-    pz: b.cz + qx * b.lz + qz * b.fz,
-  };
-}
-
-// static OBB vs car box via corner tests (both ways), returns deepest contact
-function obbVsBox(s, b) {
-  let best = null;
-  // car corners inside the static box
-  for (const sx of [-1, 1])
-    for (const sz of [-1, 1]) {
-      const px = b.cx + sx * b.hw * b.lx + sz * b.hl * b.fx;
-      const pz = b.cz + sx * b.hw * b.lz + sz * b.hl * b.fz;
-      const dx = px - s.x,
-        dz = pz - s.z;
-      const u = dx * s.c + dz * s.s,
-        v = -dx * s.s + dz * s.c;
-      const ou = s.hx - Math.abs(u),
-        ov = s.hz - Math.abs(v);
-      if (ou > 0 && ov > 0) {
-        let nx, nz, depth;
-        if (ou < ov) {
-          const sg = Math.sign(u) || 1;
-          nx = s.c * sg;
-          nz = s.s * sg;
-          depth = ou;
-        } else {
-          const sg = Math.sign(v) || 1;
-          nx = -s.s * sg;
-          nz = s.c * sg;
-          depth = ov;
-        }
-        if (!best || depth > best.depth) best = { nx, nz, depth, px, pz };
-      }
-    }
-  // static corners inside the car
-  for (const sx of [-1, 1])
-    for (const sz of [-1, 1]) {
-      const px = s.x + sx * s.hx * s.c - sz * s.hz * s.s;
-      const pz = s.z + sx * s.hx * s.s + sz * s.hz * s.c;
-      const hit = circleVsBox(px, pz, 0.01, b);
-      if (hit && (!best || hit.depth > best.depth)) best = hit;
-    }
-  return best;
-}
-
-function segmentVsBox(s, b) {
-  const len = Math.hypot(s.x2 - s.x1, s.z2 - s.z1);
-  const n = Math.max(2, Math.ceil(len / 0.5));
-  let best = null;
-  for (let i = 0; i <= n; i++) {
-    const t = i / n;
-    const hit = circleVsBox(s.x1 + (s.x2 - s.x1) * t, s.z1 + (s.z2 - s.z1) * t, s.r, b);
-    if (hit && (!best || hit.depth > best.depth)) best = hit;
-  }
-  return best;
-}
-
-function respond(phys, hit, box, restitution, friction) {
-  _n.set(hit.nx, 0, hit.nz).normalize();
-  // positional correction
-  phys.pos.addScaledVector(_n, hit.depth * 0.9);
-  _p.set(hit.px, phys.pos.y, hit.pz);
+// Impulse response against a fixed obstacle. Records impact, scraping and damage on phys.
+function respond(phys, hit, restitution, friction) {
+  const n = hit.n;
+  // push out of the obstacle (vertical push-down is limited so walls can't pin a car)
+  const push = hit.depth * 0.9;
+  phys.pos.x += n.x * push;
+  phys.pos.z += n.z * push;
+  phys.pos.y += n.y * push * (n.y < 0 ? 0.3 : 1);
+  _p.copy(hit.p);
   _r.subVectors(_p, phys.pos);
   _v.crossVectors(phys.angVel, _r).add(phys.vel);
-  const vn = _v.dot(_n);
-  if (vn >= 0) return 0;
-  const k = phys.invMassAt(_p, _n);
-  const j = (-(1 + restitution) * vn) / k;
-  _J.copy(_n).multiplyScalar(j);
-  // tangential friction
-  _t.copy(_v).addScaledVector(_n, -vn);
+  const vn = _v.dot(n);
+  _t.copy(_v).addScaledVector(n, -vn);
   const vt = _t.length();
+  // sliding along the obstacle: scrape (sparks + sound)
+  if (vt > 2.5 && vn > -6) phys.noteScrape?.(_p, vt);
+  if (vn >= 0) return 0;
+  const k = phys.invMassAt(_p, n);
+  const j = (-(1 + restitution) * vn) / k;
+  _J.copy(n).multiplyScalar(j);
   if (vt > 1e-3) {
     _t.divideScalar(vt);
     const kt = phys.invMassAt(_p, _t);
@@ -258,69 +411,71 @@ function respond(phys, hit, box, restitution, friction) {
     _J.addScaledVector(_t, -jt);
   }
   phys.applyImpulse(_J, _p);
+  phys.addDamage?.(_p, -vn);
   return -vn;
 }
 
-// Vehicle vs vehicle (both dynamic). Returns impact speed.
+// Vehicle vs vehicle (b may be kinematic). Returns impact speed.
 export function resolveVehiclePair(a, b, bIsKinematic = false) {
-  const A = vehicleBox(a);
-  const Ab = { ...A };
-  const B = vehicleBox(b);
-  if (Math.abs(A.cy - B.cy) > 2.5) return 0;
-  const dx = A.cx - B.cx,
-    dz = A.cz - B.cz;
-  if (dx * dx + dz * dz > (A.R + B.R) ** 2) return 0;
-  // SAT on 4 axes
-  const axes = [
-    [Ab.lx, Ab.lz],
-    [Ab.fx, Ab.fz],
-    [B.lx, B.lz],
-    [B.fx, B.fz],
-  ];
-  let minPen = Infinity,
-    nx = 0,
-    nz = 0;
-  const proj = (bx, ax, az) => Math.abs(bx.hw * (bx.lx * ax + bx.lz * az)) + Math.abs(bx.hl * (bx.fx * ax + bx.fz * az));
-  for (const [ax, az] of axes) {
-    const dist = Math.abs(dx * ax + dz * az);
-    const pen = proj(Ab, ax, az) + proj(B, ax, az) - dist;
-    if (pen <= 0) return 0;
-    if (pen < minPen) {
-      minPen = pen;
-      const sg = dx * ax + dz * az >= 0 ? 1 : -1;
-      nx = ax * sg;
-      nz = az * sg;
-    }
+  const A = _shapeA.update(a);
+  const B = _shapeB.update(b);
+  const dx = A.c.x - B.c.x,
+    dy = A.c.y - B.c.y,
+    dz = A.c.z - B.c.z;
+  const reach = A.bound + B.bound;
+  if (dx * dx + dy * dy + dz * dz > reach * reach) return 0;
+  // deepest contact from either car's sample points against the other's rounded box
+  let best = samplesVsCar(A, B, _hit, 0); // normal from B toward A
+  if (best > 0) {
+    _pairN.copy(_hit.n);
+    _p.copy(_hit.p);
   }
-  // contact point: midpoint between centres, pushed along n
-  _n.set(nx, 0, nz);
-  const px = (A.cx + B.cx) / 2,
-    pz = (A.cz + B.cz) / 2;
+  const bestB = samplesVsCar(B, A, _hit2, best); // normal from A toward B
+  if (bestB > best) {
+    best = bestB;
+    _pairN.copy(_hit2.n).negate();
+    _p.copy(_hit2.p);
+  }
+  if (best <= 0) return 0;
+  _n.copy(_pairN);
   const totalInv = 1 / a.mass + (bIsKinematic ? 0 : 1 / b.mass);
   const shareA = 1 / a.mass / totalInv;
-  a.pos.addScaledVector(_n, minPen * shareA);
-  if (!bIsKinematic) b.pos.addScaledVector(_n, -minPen * (1 - shareA));
-  _p.set(px, (A.cy + B.cy) / 2, pz);
-  // relative velocity at contact
+  // separate horizontally (cars don't get lifted by each other's push-out)
+  const hn = Math.hypot(_n.x, _n.z) || 1;
+  a.pos.x += (_n.x / hn) * best * shareA;
+  a.pos.z += (_n.z / hn) * best * shareA;
+  if (!bIsKinematic) {
+    b.pos.x -= (_n.x / hn) * best * (1 - shareA);
+    b.pos.z -= (_n.z / hn) * best * (1 - shareA);
+  }
+  // relative velocity at the contact
   _r.subVectors(_p, a.pos);
   _v.crossVectors(a.angVel, _r).add(a.vel);
-  const _r2 = new THREE.Vector3().subVectors(_p, b.pos);
-  const vb = new THREE.Vector3().crossVectors(b.angVel, _r2).add(b.vel);
-  _v.sub(vb);
+  _r2.subVectors(_p, b.pos);
+  _vb.crossVectors(b.angVel, _r2).add(b.vel);
+  _v.sub(_vb);
   const vn = _v.dot(_n);
+  _t.copy(_v).addScaledVector(_n, -vn);
+  const vt = _t.length();
+  if (vt > 3 && vn > -5) {
+    a.noteScrape?.(_p, vt);
+    if (!bIsKinematic) b.noteScrape?.(_p, vt);
+  }
   if (vn >= 0) return 0;
   const e = 0.25;
   const k = a.invMassAt(_p, _n) + (bIsKinematic ? 0 : b.invMassAt(_p, _n));
   const j = (-(1 + e) * vn) / k;
   _J.copy(_n).multiplyScalar(j);
-  // friction
-  _t.copy(_v).addScaledVector(_n, -vn);
-  const vt = _t.length();
   if (vt > 1e-3) {
     _t.divideScalar(vt);
     _J.addScaledVector(_t, -Math.min(0.3 * j, (vt / k) * 0.5));
   }
   a.applyImpulse(_J, _p);
-  if (!bIsKinematic) b.applyImpulse(_J.clone().negate(), _p);
+  a.addDamage?.(_p, -vn);
+  if (!bIsKinematic) {
+    _J.negate();
+    b.applyImpulse(_J, _p);
+    b.addDamage?.(_p, -vn);
+  }
   return -vn;
 }

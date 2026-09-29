@@ -1,5 +1,5 @@
-// Height field with triangle-consistent sampling. The terrain mesh uses the same
-// triangulation (anti-diagonal split) so physics and visuals match exactly.
+// Height field with triangle-consistent sampling (the terrain mesh uses the same
+// anti-diagonal split) plus a smooth B-spline surface for the vehicle physics.
 
 export class HeightField {
   constructor(data, res, size) {
@@ -87,6 +87,69 @@ export class HeightField {
     out.y = ny * l;
     out.z = nz * l;
     return out;
+  }
+
+  // Smooth (C2) cubic B-spline surface over the grid, with its analytic normal. The 4 m
+  // triangle facets above produce slope steps at every edge, which the suspension feels as
+  // a buzz at speed; this surface has none. Returns height, writes the normal into out.
+  sampleSmooth(x, z, out) {
+    const r = this.res;
+    let fx = (x + this.half) * this.inv;
+    let fz = (z + this.half) * this.inv;
+    if (fx < 0) fx = 0;
+    else if (fx > r - 1e-5) fx = r - 1e-5;
+    if (fz < 0) fz = 0;
+    else if (fz > r - 1e-5) fz = r - 1e-5;
+    const ix = fx | 0,
+      iz = fz | 0;
+    const tx = fx - ix,
+      tz = fz - iz;
+    // uniform cubic B-spline basis and derivatives
+    const ux = 1 - tx,
+      uz = 1 - tz;
+    const tx2 = tx * tx,
+      tz2 = tz * tz;
+    const ax0 = (ux * ux * ux) / 6,
+      ax1 = (3 * tx2 * tx - 6 * tx2 + 4) / 6,
+      ax2 = (-3 * tx2 * tx + 3 * tx2 + 3 * tx + 1) / 6,
+      ax3 = (tx2 * tx) / 6;
+    const dx0 = -0.5 * ux * ux,
+      dx1 = 1.5 * tx2 - 2 * tx,
+      dx2 = -1.5 * tx2 + tx + 0.5,
+      dx3 = 0.5 * tx2;
+    const az0 = (uz * uz * uz) / 6,
+      az1 = (3 * tz2 * tz - 6 * tz2 + 4) / 6,
+      az2 = (-3 * tz2 * tz + 3 * tz2 + 3 * tz + 1) / 6,
+      az3 = (tz2 * tz) / 6;
+    const dz0 = -0.5 * uz * uz,
+      dz1 = 1.5 * tz2 - 2 * tz,
+      dz2 = -1.5 * tz2 + tz + 0.5,
+      dz3 = 0.5 * tz2;
+    const d = this.data;
+    const s = this.stride;
+    const x0 = ix > 0 ? ix - 1 : 0,
+      x2 = ix + 1,
+      x3 = ix + 2 <= r ? ix + 2 : r;
+    const z0 = (iz > 0 ? iz - 1 : 0) * s,
+      z1 = iz * s,
+      z2 = (iz + 1) * s,
+      z3 = (iz + 2 <= r ? iz + 2 : r) * s;
+    let r0 = d[z0 + x0] * ax0 + d[z0 + ix] * ax1 + d[z0 + x2] * ax2 + d[z0 + x3] * ax3;
+    let r1 = d[z1 + x0] * ax0 + d[z1 + ix] * ax1 + d[z1 + x2] * ax2 + d[z1 + x3] * ax3;
+    let r2 = d[z2 + x0] * ax0 + d[z2 + ix] * ax1 + d[z2 + x2] * ax2 + d[z2 + x3] * ax3;
+    let r3 = d[z3 + x0] * ax0 + d[z3 + ix] * ax1 + d[z3 + x2] * ax2 + d[z3 + x3] * ax3;
+    const h = r0 * az0 + r1 * az1 + r2 * az2 + r3 * az3;
+    const gz = (r0 * dz0 + r1 * dz1 + r2 * dz2 + r3 * dz3) * this.inv;
+    r0 = d[z0 + x0] * dx0 + d[z0 + ix] * dx1 + d[z0 + x2] * dx2 + d[z0 + x3] * dx3;
+    r1 = d[z1 + x0] * dx0 + d[z1 + ix] * dx1 + d[z1 + x2] * dx2 + d[z1 + x3] * dx3;
+    r2 = d[z2 + x0] * dx0 + d[z2 + ix] * dx1 + d[z2 + x2] * dx2 + d[z2 + x3] * dx3;
+    r3 = d[z3 + x0] * dx0 + d[z3 + ix] * dx1 + d[z3 + x2] * dx2 + d[z3 + x3] * dx3;
+    const gx = (r0 * az0 + r1 * az1 + r2 * az2 + r3 * az3) * this.inv;
+    if (out) {
+      out.gx = gx;
+      out.gz = gz;
+    }
+    return h;
   }
 
   // Grid vertex accessor

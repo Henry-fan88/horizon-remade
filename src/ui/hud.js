@@ -3,6 +3,8 @@ import { clamp, formatNumber } from '../core/math.js';
 import { WORLD, PALETTE } from '../config.js';
 
 const DPR = () => Math.min(2, window.devicePixelRatio || 1);
+// "0".."499" as strings, so per-frame gauge text doesn't build new strings
+const NUM = Array.from({ length: 500 }, (_, i) => String(i));
 
 function el(tag, cls, parent, html) {
   const e = document.createElement(tag);
@@ -42,12 +44,20 @@ export class Speedo {
     const top = Math.ceil(maxRpm / 1000) * 1000;
     const toA = (r) => a0 + (clamp(r, 0, top) / top) * sweep;
     this.rpmSmooth += (rpm - this.rpmSmooth) * 0.35;
-    // backdrop
-    const bg = g.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.25);
-    bg.addColorStop(0, 'rgba(8,8,14,0.55)');
-    bg.addColorStop(0.75, 'rgba(8,8,14,0.35)');
-    bg.addColorStop(1, 'rgba(8,8,14,0)');
-    g.fillStyle = bg;
+    // backdrop (gradients are built once and reused: canvas gradients are garbage per frame)
+    if (!this._bg) {
+      this._bg = g.createRadialGradient(cx, cy, R * 0.2, cx, cy, R * 1.25);
+      this._bg.addColorStop(0, 'rgba(8,8,14,0.55)');
+      this._bg.addColorStop(0.75, 'rgba(8,8,14,0.35)');
+      this._bg.addColorStop(1, 'rgba(8,8,14,0)');
+      for (const hotK of [0, 1]) {
+        const grd = g.createLinearGradient(cx - R, cy, cx + R, cy);
+        grd.addColorStop(0, 'rgba(255,255,255,0.75)');
+        grd.addColorStop(1, hotK ? PALETTE.pink : '#ffffff');
+        (this._arc || (this._arc = []))[hotK] = grd;
+      }
+    }
+    g.fillStyle = this._bg;
     g.beginPath();
     g.arc(cx, cy, R * 1.25, 0, Math.PI * 2);
     g.fill();
@@ -69,10 +79,7 @@ export class Speedo {
     g.lineWidth = 9;
     g.shadowColor = hot ? PALETTE.pink : 'rgba(255,255,255,0.8)';
     g.shadowBlur = 12;
-    const grd = g.createLinearGradient(cx - R, cy, cx + R, cy);
-    grd.addColorStop(0, 'rgba(255,255,255,0.75)');
-    grd.addColorStop(1, hot ? PALETTE.pink : '#ffffff');
-    g.strokeStyle = grd;
+    g.strokeStyle = this._arc[hot ? 1 : 0];
     g.beginPath();
     g.arc(cx, cy, R - 12, a0, toA(this.rpmSmooth));
     g.stroke();
@@ -96,7 +103,7 @@ export class Speedo {
       if (major) {
         const rn = R - 26;
         g.fillStyle = r >= redline ? '#ff4d6d' : 'rgba(255,255,255,0.85)';
-        g.fillText(String(r / 1000), cx + Math.cos(a) * rn, cy + Math.sin(a) * rn);
+        g.fillText(NUM[r / 1000] ?? String(r / 1000), cx + Math.cos(a) * rn, cy + Math.sin(a) * rn);
       }
     }
     // needle
@@ -116,7 +123,8 @@ export class Speedo {
     g.shadowColor = 'rgba(0,0,0,0.7)';
     g.shadowBlur = 10;
     g.font = '700 italic 64px "Barlow Condensed", sans-serif';
-    g.fillText(String(Math.round(v)), cx, cy - 4);
+    const vi = Math.round(v);
+    g.fillText(NUM[vi] ?? String(vi), cx, cy - 4);
     g.shadowBlur = 0;
     g.font = '600 13px "Barlow", sans-serif';
     g.fillStyle = 'rgba(255,255,255,0.7)';
@@ -131,7 +139,7 @@ export class Speedo {
     g.stroke();
     g.fillStyle = '#fff';
     g.font = '700 italic 28px "Barlow Condensed", sans-serif';
-    g.fillText(gear < 0 ? 'R' : gear === 0 ? 'N' : String(gear), cx, gy + 1);
+    g.fillText(gear < 0 ? 'R' : gear === 0 ? 'N' : NUM[gear], cx, gy + 1);
     if (boost !== undefined && boost >= 0) {
       // small turbo pressure arc
       g.lineWidth = 3;
@@ -158,14 +166,12 @@ function roundRect(g, x, y, w, h, r) {
 }
 
 // ---------------------------------------------------------------- icons
+const ICON_COLORS = { race: PALETTE.pink, circuit: PALETTE.pink, sprint: PALETTE.pink, dirt: '#e0a040', drift: PALETTE.purple, speed: PALETTE.cyan, zone: PALETTE.cyan, jump: PALETTE.orange, festival: PALETTE.pink, board: PALETTE.orange, player: '#ffffff', online: '#48f0a0', viewpoint: '#ffffff', drag: PALETTE.yellow };
 export function drawIcon(g, type, x, y, s = 1, color = null) {
   g.save();
   g.translate(x, y);
   g.scale(s, s);
-  const col =
-    color ||
-    { race: PALETTE.pink, circuit: PALETTE.pink, sprint: PALETTE.pink, dirt: '#e0a040', drift: PALETTE.purple, speed: PALETTE.cyan, zone: PALETTE.cyan, jump: PALETTE.orange, festival: PALETTE.pink, board: PALETTE.orange, player: '#ffffff', online: '#48f0a0', viewpoint: '#ffffff', drag: PALETTE.yellow }[type] ||
-    '#fff';
+  const col = color || ICON_COLORS[type] || '#fff';
   g.fillStyle = 'rgba(10,10,16,0.85)';
   g.strokeStyle = col;
   g.lineWidth = 2;
@@ -310,14 +316,12 @@ export class Minimap {
     // markers (drawn upright)
     const cosr = Math.cos(rot),
       sinr = Math.sin(rot);
-    const place = (wx, wz) => {
-      const dx = (wx - player.x) / mPerPx,
-        dz = (wz - player.z) / mPerPx;
-      return [c + dx * cosr - dz * sinr, c + dx * sinr + dz * cosr];
-    };
     if (markers)
       for (const m of markers) {
-        let [sx, sy] = place(m.x, m.z);
+        const mx = (m.x - player.x) / mPerPx,
+          mz = (m.z - player.z) / mPerPx;
+        let sx = c + mx * cosr - mz * sinr,
+          sy = c + mx * sinr + mz * cosr;
         const dx = sx - c,
           dy = sy - c;
         const d = Math.hypot(dx, dy);
@@ -331,7 +335,10 @@ export class Minimap {
       }
     if (others)
       for (const o of others) {
-        let [sx, sy] = place(o.x, o.z);
+        const ox = (o.x - player.x) / mPerPx,
+          oz = (o.z - player.z) / mPerPx;
+        let sx = c + ox * cosr - oz * sinr,
+          sy = c + ox * sinr + oz * cosr;
         const d = Math.hypot(sx - c, sy - c);
         if (d > c - 10) {
           sx = c + ((sx - c) / d) * (c - 10);
@@ -403,6 +410,29 @@ export class HUD {
     this.fps = el('div', 'fps', this.root);
     this.road = el('div', 'road-name', this.root);
     this.stunt = el('div', 'stunt-meter', this.root);
+    // driver-aid lights and the damage diagram, above the speedometer
+    this.status = el('div', 'car-status', this.root);
+    this.aidEls = {};
+    const aids = el('div', 'aid-lights', this.status);
+    for (const [k, label] of [['abs', 'ABS'], ['tcs', 'TCS'], ['esc', 'ESC']]) this.aidEls[k] = el('span', '', aids, label);
+    this.aidHold = { abs: 0, tcs: 0, esc: 0 };
+    this.aidOn = { abs: false, tcs: false, esc: false };
+    // top-down damage diagram: front, rear, left, right panels
+    this.dmg = el(
+      'div',
+      'damage-diagram',
+      this.status,
+      `<svg viewBox="0 0 40 64" width="36" height="58">
+        <path data-z="front" d="M8 16 Q8 4 20 3 Q32 4 32 16 Z"/>
+        <path data-z="rear" d="M8 48 L32 48 Q32 60 20 61 Q8 60 8 48 Z"/>
+        <path data-z="left" d="M7 17 L12 17 L12 47 L7 47 Z"/>
+        <path data-z="right" d="M28 17 L33 17 L33 47 L28 47 Z"/>
+        <rect x="13" y="18" width="14" height="28" rx="3" class="cabin"/>
+      </svg>`
+    );
+    this.dmgZones = {};
+    for (const z of this.dmg.querySelectorAll('[data-z]')) this.dmgZones[z.dataset.z] = z;
+    this.dmgLevel = { front: -1, rear: -1, left: -1, right: -1 };
     this.visible = true;
     this.lastRoad = '';
     this.shiftFlash = 0;
@@ -419,6 +449,46 @@ export class HUD {
     this.speedo.draw(s.speedKmh, s.rpm, s.maxRpm, s.redline, s.gear, s.units, this.shiftFlash, s.boost);
     this.minimap.draw(s.pos, s.heading, s.speedKmh, s.route, s.markers, s.others);
     this.fps.textContent = s.showFps ? `${Math.round(s.fps)} FPS` : '';
+    if (s.aid) this.updateAids(dt, s.aid);
+    if (s.damage) this.setDamage(s.damage);
+  }
+
+  // colour each panel by its damage (quantised so the DOM only changes on real steps)
+  setDamage(d) {
+    let any = false;
+    for (const k in this.dmgLevel) {
+      const lvl = Math.min(10, Math.round(d[k] * 10));
+      if (lvl > 0) any = true;
+      if (lvl === this.dmgLevel[k]) continue;
+      this.dmgLevel[k] = lvl;
+      const t = lvl / 10;
+      // white -> amber -> red
+      const r = 255,
+        g = Math.round(255 - t * 205),
+        b = Math.round(255 - Math.min(1, t * 2) * 235);
+      this.dmgZones[k].style.fill = `rgb(${r},${g},${b})`;
+      this.dmgZones[k].style.fillOpacity = String(0.35 + t * 0.6);
+    }
+    this.dmg.classList.toggle('on', any);
+  }
+
+  damageHit(amount) {
+    if (amount < 0.03) return;
+    this.dmg.classList.remove('hit');
+    void this.dmg.offsetWidth;
+    this.dmg.classList.add('hit');
+  }
+
+  // light an aid while it works, held briefly so short interventions stay readable
+  updateAids(dt, aid) {
+    for (const k in this.aidHold) {
+      this.aidHold[k] = aid[k] > 0.12 ? 0.35 : Math.max(0, this.aidHold[k] - dt);
+      const on = this.aidHold[k] > 0;
+      if (on !== this.aidOn[k]) {
+        this.aidOn[k] = on;
+        this.aidEls[k].classList.toggle('on', on);
+      }
+    }
   }
 
   setRoadName(name) {

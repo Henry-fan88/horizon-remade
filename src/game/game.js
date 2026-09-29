@@ -11,6 +11,7 @@ import { Vehicle } from '../vehicle/vehicle.js';
 import { CAR_BY_ID } from '../vehicle/carspecs.js';
 import { buildCar } from '../vehicle/carmodel.js';
 import { preloadRealCar } from '../vehicle/realcar.js';
+import { measureAllCars } from '../vehicle/carperf.js';
 import { Effects } from '../vehicle/effects.js';
 import { Input } from '../core/input.js';
 import { AudioEngine } from '../core/audio.js';
@@ -31,7 +32,8 @@ import { WorldMap } from '../ui/worldmap.js';
 import { TouchControls } from '../ui/touch.js';
 import { NetClient } from '../net/net.js';
 import { ReflectionProbe } from '../render/probe.js';
-import { PHYSICS_HZ, DEFAULT_SETTINGS } from '../config.js';
+import { FarShadow, installShadowChunks } from '../render/farshadow.js';
+import { PHYSICS_HZ, DEFAULT_SETTINGS, WORLD } from '../config.js';
 import { clamp, formatNumber } from '../core/math.js';
 import { LOCATIONS } from '../world/worldgen.js';
 
@@ -39,9 +41,9 @@ const STEP = 1 / PHYSICS_HZ;
 
 export const QUALITY = {
   low: { pixelRatio: 0.75, msaa: 0, shadow: 1024, veg: 0.5, bloom: false, grass: 0 },
-  medium: { pixelRatio: 1, msaa: 2, shadow: 2048, veg: 0.75, bloom: true, grass: 0.4 },
-  high: { pixelRatio: 1.25, msaa: 4, shadow: 4096, veg: 1, bloom: true, grass: 0.75 },
-  ultra: { pixelRatio: 2, msaa: 4, shadow: 4096, veg: 1.2, bloom: true, grass: 1 },
+  medium: { pixelRatio: 1, msaa: 2, shadow: 2048, veg: 0.75, bloom: 'lite', grass: 0.4 },
+  high: { pixelRatio: 1.25, msaa: 4, shadow: 4096, veg: 1, bloom: 'full', grass: 0.75 },
+  ultra: { pixelRatio: 2, msaa: 4, shadow: 4096, veg: 1.2, bloom: 'full', grass: 1 },
 };
 
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
@@ -56,6 +58,8 @@ export class Game {
     this.params = new URLSearchParams(location.search);
     this.save = new Save();
     this.settings = { ...DEFAULT_SETTINGS, aiSkill: 0.93, ...this.save.data.settings };
+    // older saves stored the steering assist as on/off
+    if (typeof this.settings.steeringAssist === 'boolean') this.settings.steeringAssist = this.settings.steeringAssist ? 'normal' : 'off';
     this.save.data.settings = this.settings;
     this.state = 'loading';
     this.time = 0;
@@ -69,10 +73,12 @@ export class Game {
     this.gpsRoute = null;
     this.gpsTarget = null;
     this.drafting = false;
+    this._lightDir = new THREE.Vector3();
   }
 
   async start(onProgress) {
     installAtmosphere();
+    installShadowChunks();
     const canvas = document.getElementById('game-canvas');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', reversedDepthBuffer: true, stencil: false });
     this.renderer = renderer;
@@ -102,6 +108,8 @@ export class Game {
     // Load local car geometry in parallel with world generation. All car builders
     // stay synchronous, including garage thumbnails and networked vehicles.
     const carAssetsReady = preloadRealCar();
+    // garage figures come from driving each car's physics, not a formula
+    measureAllCars();
     const surfaceAssetsReady = preloadSurfaceAssets(renderer.capabilities.getMaxAnisotropy());
     const data = await generateInWorker(0, (p, m) => onProgress?.(p * 0.85, m));
     onProgress?.(0.88, 'Building the world');
@@ -116,6 +124,8 @@ export class Game {
     onProgress?.(0.91, 'Setting up the festival');
     await nextFrame();
     this.props = new Props(this, data);
+    // long-range shadows: terrain, tree canopies and buildings cast beyond the shadow map
+    this.farShadow = new FarShadow(renderer, this.world, this.collision.statics);
     this.boards = this.props.boards;
     this.boardsTotal = this.props.boardsTotal;
     this.festivalPos = { x: LOCATIONS.festival.x, z: LOCATIONS.festival.z };
@@ -218,9 +228,11 @@ export class Game {
   }
 
   configurePlayerPhysics(v) {
-    v.physics.steerAssist = !!this.settings.steeringAssist;
-    v.physics.tractionControl = !!this.settings.tractionControl;
-    v.physics.autoGear = this.settings.transmission !== 'manual';
+    const s = this.settings;
+    v.physics.setAssists({ steering: s.steeringAssist, stability: !!s.stability, abs: !!s.abs, tc: !!s.tractionControl });
+    v.physics.damageMode = s.damage || 'cosmetic';
+    v.physics.updateDamageEffects();
+    v.physics.autoGear = s.transmission !== 'manual';
   }
 
   buildHeroCar() {
@@ -280,7 +292,7 @@ export class Game {
       this.env.sun.shadow.map.dispose();
       this.env.sun.shadow.map = null;
     }
-    this.post.bloomEnabled = Q.bloom;
+    this.post.setBloom(Q.bloom);
     this.post.setQuality({ msaa: Q.msaa, scale: 1 });
     if (!first && this.world?.vegetation) {
       this.world.vegetation.quality = Q.veg;
@@ -295,7 +307,7 @@ export class Game {
     if (all || key === 'quality') this.applyQuality(s.quality, all);
     if (all || key === 'timeOfDay') this.env.setMode(s.timeOfDay === 'dynamic' ? 'dynamic' : s.timeOfDay);
     if (all || key === 'dayLength') this.env.dayMinutes = Math.max(4, Number(s.dayLength) || 40);
-    if ((all || ['steeringAssist', 'tractionControl', 'transmission'].includes(key)) && this.player) this.configurePlayerPhysics(this.player);
+    if ((all || ['steeringAssist', 'stability', 'abs', 'tractionControl', 'transmission', 'damage'].includes(key)) && this.player) this.configurePlayerPhysics(this.player);
     if (all || key === 'camera') {
       this.gameCam.mode = Number(s.camera) || 0;
       this.gameCam.snap();
@@ -415,6 +427,7 @@ export class Game {
       this.gpsTarget = null;
       this.skills.bank();
       this.race.start(def, opts);
+      this.repairPlayer();
       this.rewind.clear();
       this.hud.show(true);
     };
@@ -499,6 +512,7 @@ export class Game {
         const side = near.road.width / 4;
         this.player.place(near.x - Math.cos(h) * side, near.z + Math.sin(h) * side, h);
       } else this.player.place(x, z, heading);
+      this.repairPlayer();
       this.rewind.clear();
     });
   }
@@ -507,6 +521,7 @@ export class Game {
     const P = this.props.festivalParking;
     this.fadeThen(() => {
       this.player.place(P.x, P.z, Math.PI * 0.85);
+      this.repairPlayer();
       this.rewind.clear();
     });
   }
@@ -690,11 +705,12 @@ export class Game {
     }
     // environment + world streaming
     this.env.update(dt, this.inspectionFocus || this.player.root.position);
+    this.farShadow.update(this._lightDir.subVectors(this.env.sun.position, this.env.sun.target.position).normalize());
     if (this.env.forceLights) this.env.lightsOn = true;
-    this.env.sky.mesh.position.copy(this.camera.position);
+    this.env.skyView.mesh.position.copy(this.camera.position);
     this.world.update(dt, this.camera, this.env);
     this.props.update(dt, this.env);
-    if (this.heroCar) this.heroCar.group.rotation.y += dt * 0.35;
+    this.updateCarDetail(dt);
     for (const m of this.markers) {
       m.obj.userData.beam.material.uniforms.time.value = this.time;
       m.obj.userData.icon.position.y = 5.5 + Math.sin(this.time * 2) * 0.3;
@@ -711,10 +727,26 @@ export class Game {
     this.post.uniforms.exposure.value = this.env.exposure;
     const kmh = this.player.physics.speed * 3.6;
     this.post.uniforms.speedBlur.value = this.settings.motionBlur && this.gameCam.mode <= 1 && this.state !== 'title' ? clamp((kmh - 110) / 220, 0, 1) : 0;
-    this.updateProbe();
+    this.updateProbe(dt);
     this.updateDynamicRes(dt);
     this.post.render(this.scene, this.camera, dt);
     input.endFrame();
+  }
+
+  // Detail levels for the authored car models by camera distance; the festival display
+  // car is hidden (and stops turning) once you are away from the festival.
+  updateCarDetail(dt) {
+    const cam = this.camera.position;
+    for (const v of this.vehicles) v.model.setLodDistance?.(cam.distanceTo(v.root.position));
+    const hero = this.heroCar;
+    if (hero) {
+      const d = cam.distanceTo(hero.group.position);
+      hero.group.visible = d < 420;
+      if (hero.group.visible) {
+        hero.group.rotation.y += dt * 0.35;
+        hero.setLodDistance?.(d);
+      }
+    }
   }
 
   // lower the internal render resolution when the frame rate drops, raise it again when there is headroom
@@ -735,8 +767,9 @@ export class Game {
     }
   }
 
-  // dynamic reflections on the player's paint
-  updateProbe() {
+  // dynamic reflections on the player's paint: one cube face at a time, paced by speed
+  // (a full refresh about every half second at speed, every two seconds when slow)
+  updateProbe(dt) {
     const probe = this.probe;
     const qn = this.qualityName();
     probe.enabled = qn === 'high' || qn === 'ultra';
@@ -747,8 +780,20 @@ export class Game {
       }
       return;
     }
+    // the probe renders with shadows but without updating them: wait until the sun's shadow
+    // map exists (sampling a missing one is what raised GL sampler warnings at start-up)
+    if (!this.env.sun.shadow.map) return;
+    const speed = this.player.physics.speed;
+    const perFace = speed > 25 ? 1 / 12 : speed > 8 ? 1 / 6 : 1 / 3;
+    this._probeT = (this._probeT || 0) + dt;
+    if (probe.ready && this._probeT < perFace) return;
+    this._probeT = 0;
     if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, ...this.markers.map((m) => m.obj)];
-    const hide = [...this._probeHide, this.player.root, ...this.net.remoteGroups()];
+    const hide = this._probeList || (this._probeList = []);
+    hide.length = 0;
+    for (const o of this._probeHide) hide.push(o);
+    hide.push(this.player.root);
+    for (const o of this.net.remoteGroups()) hide.push(o);
     if (this.heroCar) hide.push(this.heroCar.group);
     probe.update(this.renderer, this.scene, this.player.root.position, hide);
     const mat = this.player.model.paintMat;
@@ -839,29 +884,91 @@ export class Game {
     if (impact > 4) {
       this.gameCam.addShake(Math.min(1, impact / 20));
       this.audio.impact(impact);
-      const f = p.getForward(new THREE.Vector3());
-      this.effects.sparksAt(p.pos.x + f.x * 2, p.pos.y, p.pos.z + f.z * 2, p.vel.x, p.vel.z, Math.min(40, impact * 3));
+      if (impact > 11) this.audio.crunch(Math.min(1, (impact - 8) / 20));
       if (impact > 9) this.save.data.stats.crashes++;
     }
     p.lastImpact = 0;
+    // sparks where the body actually touched, and a scrape while sliding along something
+    if (p.scrape > 2.5 || impact > 4) {
+      const sp = impact > 4 ? p.impactPoint : p.scrapePoint;
+      this.effects.sparksAt(sp.x, sp.y, sp.z, p.vel.x, p.vel.z, impact > 4 ? Math.min(40, impact * 3) : Math.min(6, p.scrape * 0.3));
+    }
+    this.audio.updateScrape(p.scrape > 2.5 ? Math.min(1, (p.scrape - 2) / 12) : 0, p.speed);
+    p.scrape = 0;
+    if (p.lastDamage > 0) {
+      this.hud.damageHit(p.lastDamage);
+      p.lastDamage = 0;
+    }
+    this.updateDamageSmoke(dt);
     for (const v of this.vehicles) this.effects.vehicle(v, dt, v === this.player ? 1 : 0.6);
     this.skills.update(dt, this.player, { impact, drafting: this.drafting });
     const st = this.save.data.stats;
     st.distance += p.speed * dt;
     st.topSpeed = Math.max(st.topSpeed, p.speed * 3.6);
-    // splashdown
-    const wh = this.world.height(p.pos.x, p.pos.z);
-    if (p.pos.y < -0.2 && wh < -0.5 && !this.splashed) {
-      this.splashed = true;
-      this.effects.splash(p.pos.x, 0.2, p.pos.z, p.speed);
-      this.audio.splash();
+    this.updateWater(dt);
+  }
+
+  // Water: a splash on entry, spray while wading, and a rescue once the car has been
+  // afloat for a few seconds or drowned its engine in deep water.
+  updateWater(dt) {
+    const p = this.player.physics;
+    const w = p.water;
+    const wet = w.wheelsWet > 0 || w.submerged > 0.02;
+    if (wet && !this.inWater) {
+      this.inWater = true;
+      if (p.speed > 3) {
+        this.effects.splash(p.pos.x, WORLD.seaLevel + 0.1, p.pos.z, p.speed);
+        this.audio.splash();
+      }
+    } else if (!wet) this.inWater = false;
+    if (wet && p.speed > 1.5) {
+      this._wakeT = (this._wakeT || 0) - dt;
+      if (this._wakeT <= 0) {
+        this._wakeT = 0.05;
+        for (const wh of p.wheels) {
+          if (wh.point.y > WORLD.seaLevel + 0.05 && wh.contact) continue;
+          this.effects.wake(wh.point.x, WORLD.seaLevel, wh.point.z, p.vel.x, p.vel.z, Math.min(1, p.speed / 15));
+        }
+      }
+    }
+    if (w.submerged > 0.25 && !this.splashChain) {
+      this.splashChain = true;
       this.skills.breakChain('SPLASHDOWN');
-      setTimeout(() => {
+    }
+    if (!wet) this.splashChain = false;
+    const drowned = w.floatTime > 3.5 || w.depth > p.cgH + 1.4 || (w.stalled && p.speed < 2 && w.submerged > 0.3);
+    if (drowned && !this.rescuing) {
+      this.rescuing = true;
+      this.hud.toast('WATER RESCUE', w.stalled ? 'Engine flooded — towed back to the road' : 'Pulled back to the road', 'info', 2600);
+      this.fadeThen(() => {
         if (this.race.active) this.race.resetPlayerToTrack();
         else this.resetToRoad(this.player);
-        this.splashed = false;
-      }, 900);
+        this.rescuing = false;
+      });
     }
+  }
+
+  // a badly damaged engine bay smokes
+  updateDamageSmoke(dt) {
+    const p = this.player.physics;
+    const d = p.damage;
+    const worst = Math.max(d.front, d.rear);
+    if (worst < 0.6) return;
+    this._smokeT = (this._smokeT || 0) - dt;
+    if (this._smokeT > 0) return;
+    this._smokeT = 0.12 / worst;
+    const st = this.player.spec.style;
+    const engineRear = this.player.spec.wf < 0.46;
+    const z = (d.front >= d.rear) !== engineRear ? st.WB / 2 + st.fo * 0.5 : -st.WB / 2 - st.ro * 0.4;
+    const q = this._smokePos || (this._smokePos = new THREE.Vector3());
+    q.set(0, st.H * 0.75 - p.cgH, z - p.cgModel.z).applyQuaternion(p.quat).add(p.pos);
+    const g = 0.18 + Math.random() * 0.1;
+    this.effects.smoke.spawn(q.x, q.y, q.z, p.vel.x * 0.4, 1 + Math.random(), p.vel.z * 0.4, 0.5, 2.6, 2 + Math.random(), g, g, g, 0.35 * worst, 1.2, 0.4);
+  }
+
+  repairPlayer() {
+    this.player.physics.repair();
+    this.hud.setDamage(this.player.physics.damage);
   }
 
   resetToRoad(v) {
@@ -896,21 +1003,37 @@ export class Game {
       }
     a.updateEnv(active ? p.speed : 0, active && p.speed > 3 ? slip : 0, p.offroadFactor, n > 0);
     const cam = this.camera;
-    const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(cam.quaternion);
-    a.setListener(cam.position, fwd, new THREE.Vector3(0, 1, 0));
+    const fwd = this._lf || (this._lf = new THREE.Vector3());
+    a.setListener(cam.position, fwd.set(0, 0, -1).applyQuaternion(cam.quaternion), cam.up);
+    // engine sounds for the three nearest AI racers (picked without allocating)
+    const near = this._nearAI || (this._nearAI = [null, null, null]);
+    near[0] = near[1] = near[2] = null;
     if (this.race.active) {
-      const near = this.race.active.racers
-        .filter((r) => !r.isPlayer)
-        .map((r) => ({ r, d: r.v.physics.pos.distanceTo(p.pos) }))
-        .sort((x, y) => x.d - y.d);
-      const keep = new Set(near.slice(0, 3).map((x) => 'ai' + x.r.v.root.id));
-      for (const id of [...a.engines.keys()]) if (id.startsWith('ai') && !keep.has(id)) a.removeEngine(id);
-      for (const { r } of near.slice(0, 3)) {
-        const id = 'ai' + r.v.root.id;
-        if (!a.engines.has(id)) a.createEngine(id, r.v.spec.sound, true);
-        a.updateEngine(id, r.v.physics.rpm, r.v.physics.throttleOut, 0, null, 0.9, r.v.physics.pos);
+      const dist = (r) => r.v.physics.pos.distanceToSquared(p.pos);
+      for (const r of this.race.active.racers) {
+        if (r.isPlayer) continue;
+        const d = dist(r);
+        for (let k = 0; k < 3; k++)
+          if (!near[k] || d < dist(near[k])) {
+            for (let m = 2; m > k; m--) near[m] = near[m - 1];
+            near[k] = r;
+            break;
+          }
       }
-    } else for (const id of [...a.engines.keys()]) if (id.startsWith('ai')) a.removeEngine(id);
+    }
+    for (const id of a.engines.keys()) {
+      if (!id.startsWith('ai')) continue;
+      let keep = false;
+      for (let k = 0; k < 3; k++) if (near[k] && near[k].audioId === id) keep = true;
+      if (!keep) a.removeEngine(id);
+    }
+    for (let k = 0; k < 3; k++) {
+      const r = near[k];
+      if (!r) continue;
+      const id = r.audioId || (r.audioId = 'ai' + r.v.root.id);
+      if (!a.engines.has(id)) a.createEngine(id, r.v.spec.sound, true);
+      a.updateEngine(id, r.v.physics.rpm, r.v.physics.throttleOut, 0, null, 0.9, r.v.physics.pos);
+    }
   }
 
   updateHUD(dt) {
@@ -932,24 +1055,38 @@ export class Game {
       );
     }
     this.hud.setChain(this.skills.state());
-    const others = this.net.mapPlayers().map((o) => ({ x: o.x, z: o.z, color: o.color }));
-    if (this.race.active) for (const r of this.race.active.racers) if (!r.isPlayer) others.push({ x: r.v.physics.pos.x, z: r.v.physics.pos.z, color: '#ffd21f', ai: true });
+    // minimap dots for other drivers: pooled objects, no per-frame garbage
+    const others = this._others || (this._others = []);
+    const pool = this._otherPool || (this._otherPool = []);
+    others.length = 0;
+    const dot = (x, z, color, ai) => {
+      const o = pool[others.length] || (pool[others.length] = { x: 0, z: 0, color: '', ai: false });
+      o.x = x;
+      o.z = z;
+      o.color = color;
+      o.ai = ai;
+      others.push(o);
+    };
+    for (const o of this.net.players.values()) if (o.visible) dot(o.group.position.x, o.group.position.z, o.paint, false);
+    if (this.race.active) for (const r of this.race.active.racers) if (!r.isPlayer) dot(r.v.physics.pos.x, r.v.physics.pos.z, '#ffd21f', true);
     const A = this.race.active;
-    this.hud.update(dt, {
-      speedKmh: p.speed * 3.6,
-      rpm: p.rpm,
-      maxRpm: spec.electric ? spec.redline : spec.redline * 1.02,
-      redline: spec.electric ? spec.redline * 2 : spec.redline,
-      gear: p.gear,
-      units: this.settings.units,
-      boost: spec.turbo ? p.boost : undefined,
-      pos: p.pos,
-      heading: p.heading,
-      route: A ? A.routePoly || (A.routePoly = A.route.polyline(3)) : this.gpsRoute,
-      markers: A ? null : this.mapMarkers,
-      others,
-      fps: this.fps,
-      showFps: this.settings.showFps || this.params.has('fps'),
-    });
+    const h = this._hudState || (this._hudState = {});
+    h.speedKmh = p.speed * 3.6;
+    h.rpm = p.rpm;
+    h.maxRpm = spec.electric ? spec.redline : spec.redline * 1.02;
+    h.redline = spec.electric ? spec.redline * 2 : spec.redline;
+    h.gear = p.gear;
+    h.units = this.settings.units;
+    h.boost = spec.turbo ? p.boost : undefined;
+    h.pos = p.pos;
+    h.heading = p.heading;
+    h.route = A ? A.routePoly || (A.routePoly = A.route.polyline(3)) : this.gpsRoute;
+    h.markers = A ? null : this.mapMarkers;
+    h.others = others;
+    h.fps = this.fps;
+    h.showFps = this.settings.showFps || this.params.has('fps');
+    h.aid = p.aid;
+    h.damage = p.damage;
+    this.hud.update(dt, h);
   }
 }

@@ -1,5 +1,6 @@
 // Chase / hood / bumper / cinematic cameras.
 import * as THREE from 'three';
+import { WORLD } from '../config.js';
 import { clamp, damp, dampAngle, lerp, wrapAngle } from '../core/math.js';
 
 const _fwd = new THREE.Vector3();
@@ -8,6 +9,8 @@ const _tgt = new THREE.Vector3();
 const _look = new THREE.Vector3();
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
+const _origin = new THREE.Vector3();
+const _worldUp = new THREE.Vector3(0, 1, 0);
 
 export const CAMERA_MODES = ['Chase', 'Far Chase', 'Hood', 'Bumper'];
 
@@ -81,7 +84,8 @@ export class GameCamera {
       const dx = Math.sin(this.yaw),
         dz = Math.cos(this.yaw);
       _tgt.set(p.x - dx * dist, p.y + height - this.pitchFollow * dist * 0.7, p.z - dz * dist);
-      const ground = world.height(_tgt.x, _tgt.z) + 0.6;
+      // stay above the ground and the water surface
+      const ground = Math.max(world.height(_tgt.x, _tgt.z), WORLD.seaLevel) + 0.6;
       if (_tgt.y < ground) _tgt.y = ground;
       if (!this.initialized) this.pos.copy(_tgt);
       else {
@@ -102,13 +106,11 @@ export class GameCamera {
       const st = vehicle.spec.style;
       const cg = phys.cgModel;
       const hoodZ = st.cabin.a + 0.25;
-      const local =
-        this.mode === 2
-          ? new THREE.Vector3(0, st.top[0] ? interpolateTop(st, hoodZ) + 0.32 - cg.y : 1.2, hoodZ - cg.z)
-          : new THREE.Vector3(0, st.sill + 0.42 - cg.y, st.WB / 2 + st.fo + 0.05 - cg.z);
-      _tgt.copy(local).applyQuaternion(q).add(p);
+      if (this.mode === 2) _tgt.set(0, st.top[0] ? interpolateTop(st, hoodZ) + 0.32 - cg.y : 1.2, hoodZ - cg.z);
+      else _tgt.set(0, st.sill + 0.42 - cg.y, st.WB / 2 + st.fo + 0.05 - cg.z);
+      _tgt.applyQuaternion(q).add(p);
       cam.position.copy(_tgt);
-      _m.lookAt(new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, this.lookBack ? -1 : 1).applyQuaternion(q), new THREE.Vector3(0, 1, 0));
+      _m.lookAt(_origin, _look.set(0, 0, this.lookBack ? -1 : 1).applyQuaternion(q), _worldUp);
       // keep horizon steadier: blend roll out
       _q.setFromRotationMatrix(_m);
       cam.quaternion.copy(_q);
@@ -139,7 +141,7 @@ export class GameCamera {
     const x = target.x + Math.sin(this.orbitAngle) * radius,
       z = target.z + Math.cos(this.orbitAngle) * radius;
     let y = target.y + height;
-    if (world) y = Math.max(y, world.height(x, z) + 0.5);
+    if (world) y = Math.max(y, Math.max(world.height(x, z), WORLD.seaLevel) + 0.5);
     cam.position.set(x, y, z);
     cam.lookAt(target.x, target.y + 0.5, target.z);
     this.fov = damp(this.fov, 42, 2, dt);

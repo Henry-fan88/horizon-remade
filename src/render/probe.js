@@ -1,11 +1,11 @@
-// Real-time reflection probe for the player car: renders one cube face per frame
-// (terrain, roads, water, sky only) and feeds the result to the car's paint.
+// Real-time reflection probe for the player car: renders one cube face per call (the game
+// paces the calls) of terrain, roads, water and sky, and feeds the result to the paint.
 import * as THREE from 'three';
 
 export class ReflectionProbe {
   constructor(size = 128) {
     this.rt = new THREE.WebGLCubeRenderTarget(size, { type: THREE.HalfFloatType, generateMipmaps: false });
-    this.cam = new THREE.CubeCamera(0.5, 1200, this.rt);
+    this.cam = new THREE.CubeCamera(0.5, 600, this.rt);
     this.face = 0;
     this.ready = false;
     this.texture = this.rt.texture;
@@ -29,11 +29,15 @@ export class ReflectionProbe {
     const prevMip = renderer.getActiveMipmapLevel();
     const prevAuto = renderer.shadowMap.autoUpdate;
     renderer.shadowMap.autoUpdate = false;
-    const vis = hide.map((o) => o.visible);
-    hide.forEach((o) => (o.visible = false));
+    const vis = this.hidden;
+    vis.length = hide.length;
+    for (let i = 0; i < hide.length; i++) {
+      vis[i] = hide[i].visible;
+      hide[i].visible = false;
+    }
     renderer.setRenderTarget(this.rt, this.face);
     renderer.render(scene, cam.children[this.face]);
-    hide.forEach((o, i) => (o.visible = vis[i]));
+    for (let i = 0; i < hide.length; i++) hide[i].visible = vis[i];
     renderer.setRenderTarget(prevTarget, prevFace, prevMip);
     renderer.shadowMap.autoUpdate = prevAuto;
     this.face++;

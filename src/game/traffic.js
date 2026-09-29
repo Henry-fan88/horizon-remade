@@ -1,5 +1,6 @@
 // Ambient traffic: instanced cars following road lanes; near misses; crash → physics wreck.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildCar, mergeByMaterial } from '../vehicle/carmodel.js';
 import { CAR_BY_ID } from '../vehicle/carspecs.js';
 import { VehiclePhysics } from '../vehicle/vehiclephysics.js';
@@ -9,6 +10,8 @@ import { clamp } from '../core/math.js';
 const TRAFFIC_CARS = ['hatch', 'sedan', 'truck', 'rally'];
 const COLORS = ['#e8e8ea', '#1c1f24', '#8d9096', '#b3121a', '#2b3ac4', '#d9c9ae', '#3a5a40', '#6b6f76', '#f2f2f2', '#23395b', '#7a1f2b', '#c9a227'];
 const PER_STYLE = 16;
+const NEAR_DIST = 110; // cars nearer than this cast shadows
+const MID_DIST = 320; // beyond this a low-poly stand-in is drawn
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -16,6 +19,8 @@ const _p = new THREE.Vector3();
 const _s = new THREE.Vector3(1, 1, 1);
 const _e = new THREE.Euler();
 const _c = new THREE.Color();
+const _fwd = new THREE.Vector3();
+const _pv = new THREE.Vector3();
 
 class KinBody {
   constructor(spec) {
@@ -42,6 +47,10 @@ export class TrafficSystem {
     this.enabled = true;
     this.group = new THREE.Group();
     this.group.name = 'traffic';
+    this.proxyPaint = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4, metalness: 0.3 });
+    this.proxyDark = new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.5, metalness: 0.2 });
+    this.frustum = new THREE.Frustum();
+    this.sphere = new THREE.Sphere();
     this.styles = TRAFFIC_CARS.map((id) => this.buildStyle(CAR_BY_ID[id]));
     this.cars = [];
     this.roads = this.world.network.roads.filter((r) => r.kind === 'road' || r.kind === 'highway' || r.kind === 'street');
@@ -52,30 +61,38 @@ export class TrafficSystem {
     this.nearMissCooldown = 0;
   }
 
+  // Three instanced sets per car style: near (full model, casts shadows), mid (full model,
+  // no shadow) and far (a ~60-triangle proxy). Cars are frustum-culled per instance.
   buildStyle(spec) {
     const car = buildCar(spec.style, { color: '#ffffff' });
     const all = mergeByMaterial([car.group], car.group);
-    const meshes = [];
+    const make = (geo, mat, isPaint, cast, tier) => {
+      const im = new THREE.InstancedMesh(geo, mat, PER_STYLE);
+      im.count = 0;
+      im.castShadow = cast && !mat.transparent;
+      im.receiveShadow = tier !== 'far';
+      im.frustumCulled = false; // culled per car in writeInstances
+      im.isPaint = isPaint;
+      if (isPaint) for (let k = 0; k < PER_STYLE; k++) im.setColorAt(k, _c.set(0xffffff));
+      im.name = `traffic:${spec.id}:${tier}`;
+      this.group.add(im);
+      return im;
+    };
+    const near = [],
+      mid = [];
     for (const m of all) {
       let mat = m.material;
-      if (mat === car.paintMat) {
+      const isPaint = mat === car.paintMat;
+      if (isPaint) {
         mat = car.paintMat.clone();
         mat.color.set(0xffffff);
       }
-      const im = new THREE.InstancedMesh(m.geometry, mat, PER_STYLE);
-      im.count = 0;
-      im.castShadow = !mat.transparent;
-      im.receiveShadow = true;
-      im.frustumCulled = false;
-      im.isPaint = mat !== m.material;
-      if (im.isPaint) {
-        for (let k = 0; k < PER_STYLE; k++) im.setColorAt(k, _c.set(0xffffff));
-      }
-      this.group.add(im);
-      meshes.push(im);
+      near.push(make(m.geometry, mat, isPaint, true, 'near'));
+      mid.push(make(m.geometry, mat, isPaint, false, 'mid'));
     }
-    // model offset: car model origin is at ground centre; our transforms place the ground centre
-    return { spec, meshes, used: 0 };
+    const proxy = buildProxy(spec.style);
+    const far = [make(proxy.paint, this.proxyPaint, true, false, 'far'), make(proxy.dark, this.proxyDark, false, false, 'far')];
+    return { spec, tiers: [near, mid, far], used: [0, 0, 0], radius: spec.style.L / 2 + 0.6 };
   }
 
   newCar(styleIdx) {
@@ -150,7 +167,7 @@ export class TrafficSystem {
     const on = this.enabled && game.settings.traffic && !game.race.running;
     const pp = player.physics.pos;
     if (!on) {
-      for (const st of this.styles) for (const m of st.meshes) m.count = 0;
+      for (const st of this.styles) for (const tier of st.tiers) for (const m of tier) m.count = 0;
       for (const c of this.cars) c.alive = false;
       return;
     }
@@ -179,14 +196,9 @@ export class TrafficSystem {
         if (ds > 0 && ds < 28) limit = Math.min(limit, o.mode === 'dyn' ? 0 : o.speed * (ds < 12 ? 0.6 : 1));
       }
       // player ahead in our lane
-      const fx = Math.sin(Math.atan2(car.body.vel.x, car.body.vel.z));
-      void fx;
       const hx = car.body.pos.x,
         hz = car.body.pos.z;
-      const pt = this._pt;
-      const tx = pt ? 0 : 0;
-      void tx;
-      const heading = new THREE.Vector3(0, 0, 1).applyQuaternion(car.body.quat);
+      const heading = _fwd.set(0, 0, 1).applyQuaternion(car.body.quat);
       const rpx = pp.x - hx,
         rpz = pp.z - hz;
       const ahead = rpx * heading.x + rpz * heading.z;
@@ -202,7 +214,7 @@ export class TrafficSystem {
       this.place(car, dt);
       // collisions with the player
       if (d < 12) {
-        const pv = player.physics.vel.clone();
+        const pv = _pv.copy(player.physics.vel);
         const imp = resolveVehiclePair(player.physics, car.body, true);
         if (imp > 0) {
           player.physics.lastImpact = Math.max(player.physics.lastImpact, imp);
@@ -211,7 +223,7 @@ export class TrafficSystem {
       }
       // near misses: player passes close at speed
       if (d < 14) {
-        const rel = player.physics.vel.clone().sub(car.body.vel).length() * 3.6;
+        const rel = _pv.copy(player.physics.vel).sub(car.body.vel).length() * 3.6;
         const along = ahead;
         const key = along > 0 ? 1 : -1;
         const prev = car.passed.get('side');
@@ -253,28 +265,67 @@ export class TrafficSystem {
   }
 
   writeInstances() {
-    for (const st of this.styles) st.used = 0;
+    const cam = this.game.camera;
+    this.frustum.setFromProjectionMatrix(_m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+    const cp = cam.position;
+    for (const st of this.styles) st.used.fill(0);
     for (const car of this.cars) {
       if (!car.alive) continue;
       const st = this.styles[car.styleIdx];
-      if (st.used >= PER_STYLE) continue;
-      const k = st.used++;
       _p.copy(car.body.pos);
       if (car.mode === 'dyn') {
         // physics origin is the CG; model origin is ground centre under the CG
-        _p.copy(new THREE.Vector3(0, -car.spec.cgH, -(car.spec.style.WB * car.spec.wf - car.spec.style.WB / 2)).applyQuaternion(car.body.quat).add(car.phys.pos));
+        _p.set(0, -car.spec.cgH, -(car.spec.style.WB * car.spec.wf - car.spec.style.WB / 2)).applyQuaternion(car.body.quat).add(car.phys.pos);
       }
+      const d = Math.hypot(_p.x - cp.x, _p.z - cp.z);
+      this.sphere.center.copy(_p);
+      this.sphere.center.y += 0.7;
+      this.sphere.radius = st.radius;
+      // off-screen cars are skipped, except very close ones whose shadow may be in view
+      if (d > 30 && !this.frustum.intersectsSphere(this.sphere)) continue;
+      const tier = d < NEAR_DIST ? 0 : d < MID_DIST ? 1 : 2;
+      if (st.used[tier] >= PER_STYLE) continue;
+      const k = st.used[tier]++;
       _m.compose(_p, car.body.quat, _s);
-      for (const m of st.meshes) {
+      for (const m of st.tiers[tier]) {
         m.setMatrixAt(k, _m);
         if (m.isPaint) m.setColorAt(k, _c.set(car.color));
       }
     }
     for (const st of this.styles)
-      for (const m of st.meshes) {
-        m.count = st.used;
-        m.instanceMatrix.needsUpdate = true;
-        if (m.instanceColor) m.instanceColor.needsUpdate = true;
-      }
+      for (let t = 0; t < 3; t++)
+        for (const m of st.tiers[t]) {
+          m.count = st.used[t];
+          if (!m.count) continue;
+          m.instanceMatrix.needsUpdate = true;
+          if (m.instanceColor) m.instanceColor.needsUpdate = true;
+        }
   }
+}
+
+// ~60-triangle stand-in for a distant car: painted lower body + dark cabin and wheels.
+function buildProxy(st) {
+  const lowerH = Math.max(0.35, st.belt ? st.belt[0][1] * 0.9 : st.H * 0.55) - st.sill;
+  const body = new THREE.BoxGeometry(st.W * 0.96, lowerH, st.L * 0.97);
+  body.translate(0, st.sill + lowerH / 2, 0);
+  const cabinH = Math.max(0.2, st.H - st.sill - lowerH);
+  const cabin = new THREE.BoxGeometry(st.W * 0.78, cabinH, st.L * 0.45);
+  cabin.translate(0, st.sill + lowerH + cabinH / 2, ((st.cabin?.b ?? 0) + (st.cabin?.c ?? 0)) / 2);
+  const wheels = [];
+  for (const [x, z, r] of [
+    [st.trackF / 2, st.WB / 2, st.wheelR],
+    [-st.trackF / 2, st.WB / 2, st.wheelR],
+    [st.trackR / 2, -st.WB / 2, st.wheelRr ?? st.wheelR],
+    [-st.trackR / 2, -st.WB / 2, st.wheelRr ?? st.wheelR],
+  ]) {
+    const w = new THREE.CylinderGeometry(r, r, 0.26, 6);
+    w.rotateZ(Math.PI / 2);
+    w.translate(x, r, z);
+    wheels.push(w);
+  }
+  const strip = (g) => {
+    g.deleteAttribute('uv');
+    return g.index ? g.toNonIndexed() : g;
+  };
+  return { paint: strip(body), dark: mergeGeometries([cabin, ...wheels].map(strip)) };
 }

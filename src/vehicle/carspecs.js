@@ -1,6 +1,6 @@
 // Car database: body styles (for the procedural model) + physics specs.
-// The GT uses a Ferrari 458 visual; the other makes/models are fictional.
-// All performance specs retain the draft game's tuning, including the GT.
+// The GT is a Ferrari 458 Italia with its real headline specs; the other makes/models are
+// fictional. 0-100 / 0-200 times are measured by driving the physics (see carperf.js).
 import { piClass } from '../config.js';
 
 // ------------------------------------------------------------------ body styles
@@ -168,7 +168,9 @@ const RAW = [
   { id: 'rally', make: 'Nordhaven', model: 'Rally RS', year: 2019, style: 'rally', color: '#1f5fff', price: 38000, mass: 1330, powerKW: 221, redline: 7400, turbo: true, drive: 'AWD', split: 0.45, topKmh: 225, grip: 1.02, ClA: 0.35, cgH: 0.5, wf: 0.58, gears: 6, susp: 1.5, travel: 0.26, offroad: 0.85, sound: 'boxer' },
   { id: 'hatch', make: 'Maxwell', model: 'Volt GTI', year: 2021, style: 'hatch', color: '#e8e8ea', price: 28000, mass: 1350, powerKW: 180, redline: 6800, turbo: true, drive: 'FWD', topKmh: 245, grip: 0.98, ClA: 0.15, cgH: 0.52, wf: 0.62, gears: 6, susp: 1.9, travel: 0.2, offroad: 0.45, sound: 'i4' },
   { id: 'jdm', make: 'Arashi', model: 'GT-R34 Kaze', year: 2002, style: 'jdm', color: '#2b3ac4', price: 72000, mass: 1560, powerKW: 250, redline: 8000, turbo: true, drive: 'AWD', split: 0.35, topKmh: 262, grip: 1.03, ClA: 0.4, cgH: 0.49, wf: 0.56, gears: 6, susp: 2.0, travel: 0.2, offroad: 0.35, sound: 'i6' },
-  { id: 'gt', make: 'Ferrari', model: '458 Italia', year: 2009, style: 'gt', color: '#c81d25', price: 145000, mass: 1480, powerKW: 390, redline: 7600, turbo: true, drive: 'RWD', topKmh: 312, grip: 1.08, ClA: 0.6, cgH: 0.46, wf: 0.46, gears: 7, susp: 2.2, travel: 0.18, offroad: 0.25, sound: 'v8' },
+  // Ferrari 458 Italia: 4.5 L naturally aspirated flat-plane V8, 570 CV (419 kW) at 9,000 rpm,
+  // 1,380 kg dry, 42/58 weight distribution, 7-speed dual clutch, top speed 325 km/h.
+  { id: 'gt', make: 'Ferrari', model: '458 Italia', year: 2009, style: 'gt', color: '#c81d25', price: 145000, mass: 1380, powerKW: 419, redline: 9000, tqPeak: 0.67, tqFall: 0.14, turbo: false, drive: 'RWD', topKmh: 325, grip: 1.08, ClA: 0.6, cgH: 0.44, wf: 0.42, gears: 7, susp: 2.2, travel: 0.18, offroad: 0.25, sound: 'v8flat' },
   { id: 'muscle', make: 'Brute', model: 'Hellstorm 392', year: 2022, style: 'muscle', color: '#b3121a', price: 82000, mass: 1920, powerKW: 527, redline: 6400, turbo: false, drive: 'RWD', topKmh: 318, grip: 1.0, ClA: 0.25, cgH: 0.52, wf: 0.54, gears: 6, susp: 1.9, travel: 0.2, offroad: 0.3, sound: 'v8' },
   { id: 'supercar', make: 'Veloce', model: 'Tempesta V12', year: 2024, style: 'supercar', color: '#ffb300', price: 420000, mass: 1575, powerKW: 566, redline: 8700, turbo: false, drive: 'AWD', split: 0.3, topKmh: 350, grip: 1.14, ClA: 1.1, cgH: 0.43, wf: 0.43, gears: 7, susp: 2.4, travel: 0.16, offroad: 0.2, sound: 'v12' },
   { id: 'hyper', make: 'Aurora', model: 'Zenith X', year: 2025, style: 'hyper', color: '#e21d6e', price: 2400000, mass: 1420, powerKW: 895, redline: 9000, turbo: true, drive: 'AWD', split: 0.3, topKmh: 402, grip: 1.2, ClA: 1.8, cgH: 0.41, wf: 0.42, gears: 7, susp: 2.6, travel: 0.14, offroad: 0.15, sound: 'v8t' },
@@ -179,10 +181,11 @@ const RAW = [
 
 // ------------------------------------------------------------------ derived specs
 
-export function torqueCurve(x) {
-  // normalised torque vs rpm fraction of redline
-  if (x < 0.62) return 0.58 + 0.42 * Math.sin((Math.PI / 2) * (x / 0.62));
-  return 1 - 0.36 * Math.pow((x - 0.62) / 0.38, 1.7);
+// Normalised torque vs rpm as a fraction of redline. peak: where torque peaks; fall: how
+// much is lost from there to the redline (high-revving NA engines hold on much better).
+export function torqueCurve(x, peak = 0.62, fall = 0.36) {
+  if (x < peak) return 0.58 + 0.42 * Math.sin((Math.PI / 2) * (x / peak));
+  return 1 - fall * Math.pow((x - peak) / (1 - peak), 1.7);
 }
 
 function derive(raw) {
@@ -195,7 +198,7 @@ function derive(raw) {
   for (let i = 1; i <= 100; i++) {
     const x = i / 100;
     const w = ((x * raw.redline) / 60) * Math.PI * 2;
-    best = Math.max(best, torqueCurve(x) * w);
+    best = Math.max(best, torqueCurve(x, raw.tqPeak, raw.tqFall) * w);
   }
   car.peakTorque = raw.electric ? (raw.powerKW * 1000) / ((raw.redline * 0.3 * Math.PI * 2) / 60) : (raw.powerKW * 1000) / best;
   const topV = raw.topKmh / 3.6;
@@ -214,17 +217,14 @@ function derive(raw) {
   car.CdA = (2 * raw.powerKW * 1000 * eff * 0.92) / (1.225 * topV * topV * topV);
   car.ClA = raw.ClA;
   car.brake = 1.25 + (raw.grip - 1) * 0.8;
-  // estimate 0-100 km/h and PI
-  const pw = (raw.powerKW * 1000) / raw.mass; // W/kg
-  const tractionG = Math.min(raw.grip * (raw.drive === 'AWD' ? 1.0 : raw.drive === 'RWD' ? 0.62 : 0.6) * 9.81, (pw / 14) * 0.9);
-  car.zeroTo100 = Math.max(2.0, 27.8 / tractionG + 0.3 + (raw.turbo ? 0.25 : 0));
+  // stat bars; acceleration and launch are filled in from the measured 0-100 time
   const speedScore = Math.min(10, (raw.topKmh - 150) / 26);
-  const accelScore = Math.min(10, Math.max(1, (9.5 - car.zeroTo100) * 1.45));
   const handlingScore = Math.min(10, (raw.grip - 0.8) * 16 + raw.ClA * 1.6 + (1500 - raw.mass) / 600);
-  const launchScore = Math.min(10, accelScore * 0.7 + (raw.drive === 'AWD' ? 3 : 1));
   const brakeScore = Math.min(10, (car.brake - 1.0) * 14 + (1600 - raw.mass) / 350);
   const offroadScore = Math.min(10, raw.offroad * 10);
-  car.stats = { speed: speedScore, handling: handlingScore, acceleration: accelScore, launch: launchScore, braking: brakeScore, offroad: offroadScore };
+  car.stats = { speed: speedScore, handling: handlingScore, acceleration: 0, launch: 0, braking: brakeScore, offroad: offroadScore };
+  car.zeroTo100 = null;
+  car.zeroTo200 = null;
   const kwPerTonne = raw.powerKW / (raw.mass / 1000);
   const f = Math.pow(Math.min(1, Math.max(0, (kwPerTonne - 60) / 400)), 0.7);
   const gScore = Math.min(1, Math.max(0, (raw.grip - 0.85) / 0.4 + raw.ClA * 0.1));
@@ -234,6 +234,13 @@ function derive(raw) {
   car.cls = piClass(car.pi);
   car.name = `${raw.make} ${raw.model}`;
   return car;
+}
+
+// Acceleration / launch stat bars from a measured 0-100 km/h time (seconds).
+export function rateAcceleration(car) {
+  const accel = Math.min(10, Math.max(1, (9.5 - car.zeroTo100) * 1.45));
+  car.stats.acceleration = accel;
+  car.stats.launch = Math.min(10, accel * 0.7 + (car.drive === 'AWD' ? 3 : 1));
 }
 
 export const CARS = RAW.map(derive);

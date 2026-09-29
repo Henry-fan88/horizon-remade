@@ -3,7 +3,8 @@
 import * as THREE from 'three';
 import { clamp, lerp } from '../core/math.js';
 import { torqueCurve } from './carspecs.js';
-import { SURFACE_INFO } from '../world/world.js';
+import { SURFACE_INFO } from '../world/surfaces.js';
+import { WORLD } from '../config.js';
 
 const G = 9.81;
 const RHO = 1.225;
@@ -25,6 +26,17 @@ const _tmp2 = new THREE.Vector3();
 const _qInv = new THREE.Quaternion();
 const _dq = new THREE.Quaternion();
 const _nrm = { x: 0, y: 1, z: 0 };
+const _t3 = new THREE.Vector3();
+const _k3 = new THREE.Vector3();
+const WORLD_UP = new THREE.Vector3(0, 1, 0);
+
+// Driver aids. 'full' is what AI and traffic use; the player picks theirs in Settings.
+//   steering  off | normal | full   auto-countersteer strength (off = none)
+//   stability                        yaw control + throttle cut in slides, and a gentle
+//                                    attitude hold in the air (off = none)
+//   abs / tc                         anti-lock brakes / traction control
+export const ASSISTS_FULL = { steering: 'full', stability: true, abs: true, tc: true };
+export const ASSISTS_OFF = { steering: 'off', stability: false, abs: false, tc: false };
 
 export class VehiclePhysics {
   constructor(spec, world) {
@@ -115,9 +127,9 @@ export class VehiclePhysics {
     // input state
     this.input = { throttle: 0, brake: 0, steer: 0, handbrake: 0, shiftUp: false, shiftDown: false };
     this.steerAngle = 0;
-    this.steerAssist = true;
-    this.tractionControl = true;
-    this.abs = true;
+    this.assists = { ...ASSISTS_FULL };
+    // how hard each aid is intervening this step (0..1), for the HUD
+    this.aid = { esc: 0, tcs: 0, abs: 0 };
 
     // outputs for gameplay/effects
     this.speed = 0;
@@ -134,6 +146,20 @@ export class VehiclePhysics {
     this.bodyContacts = 0;
     this.onRoad = true;
     this.offroadFactor = 0;
+    // water: depth at the centre of mass, share of the body under water, how long the car
+    // has been afloat, and how flooded the cabin is (0 dry .. 1 sinking)
+    this.water = { depth: 0, submerged: 0, wheelsWet: 0, floatTime: 0, flood: 0, stalled: false };
+    // damage per zone (0 intact .. 1 wrecked). 'cosmetic' only reports it; 'simulation' also
+    // costs engine power and pulls the steering; 'off' ignores hits
+    this.damage = { front: 0, rear: 0, left: 0, right: 0 };
+    this.damageMode = 'cosmetic';
+    this.damagePower = 1;
+    this.damagePull = 0;
+    this.lastDamage = 0; // damage taken since the game last read it
+    this.scrape = 0; // fastest sliding contact since the game last read it (m/s)
+    this.scrapePoint = new THREE.Vector3();
+    this.impactPoint = new THREE.Vector3();
+    this.seaLevel = WORLD.seaLevel;
 
     const hw = W / 2 - 0.1,
       hl = L / 2 - 0.1;
@@ -153,6 +179,12 @@ export class VehiclePhysics {
       [-hw, (yLow + yHigh) / 2, zc],
       [0, yLow, zc],
     ].map((p) => new THREE.Vector3(p[0], p[1], p[2]));
+    // 3 x 2 columns of the body for buoyancy and hull drag (bottom point, height, area)
+    this.hullCols = [];
+    for (const cz of [-1, 0, 1])
+      for (const cx of [-1, 1]) this.hullCols.push(new THREE.Vector3(cx * W * 0.25, yLow - 0.05, zc + cz * L * 0.3));
+    this.hullColH = st.H - st.sill;
+    this.hullColA = (L * W) / 6;
     this.halfExtents = new THREE.Vector3(W / 2, (st.H - st.sill) / 2, L / 2);
     this.boxCenterLocal = new THREE.Vector3(0, -spec.cgH + (st.H + st.sill) / 2, zc);
   }
@@ -172,6 +204,10 @@ export class VehiclePhysics {
     this.gear = 1;
     this.upsideTimer = 0;
     this.airTime = 0;
+    const wt = this.water;
+    wt.depth = wt.submerged = wt.wheelsWet = wt.floatTime = wt.flood = 0;
+    wt.stalled = false;
+    this.powerMul = 1;
   }
 
   get heading() {
@@ -207,11 +243,76 @@ export class VehiclePhysics {
   // effective inverse mass along normal n at world point p
   invMassAt(p, n) {
     _tmp.subVectors(p, this.pos);
-    const rxn = _tmp2.crossVectors(_tmp, n);
-    const t = new THREE.Vector3();
-    this.applyInvInertia(rxn, t);
-    const k = new THREE.Vector3().crossVectors(t, _tmp);
-    return 1 / this.mass + n.dot(k);
+    _tmp2.crossVectors(_tmp, n);
+    this.applyInvInertia(_tmp2, _t3);
+    _k3.crossVectors(_t3, _tmp);
+    return 1 / this.mass + n.dot(_k3);
+  }
+
+  // a sliding contact against a wall, rail or car (called by the collision code)
+  noteScrape(p, vt) {
+    if (vt > this.scrape) {
+      this.scrape = vt;
+      this.scrapePoint.copy(p);
+    }
+    if (this.damageMode !== 'off') this.hurt(p, vt * 0.0001);
+  }
+
+  // an impact at world point p with closing speed v (m/s)
+  addDamage(p, v) {
+    // Impact effects still need the contact point when damage is disabled.
+    this.impactPoint.copy(p);
+    if (this.damageMode === 'off' || v < 3.5) return;
+    this.hurt(p, (v - 3.5) * (v - 3.5) * 0.0015);
+  }
+
+  hurt(p, amount) {
+    // zone from where the contact is on the body
+    _tmp.subVectors(p, this.pos).applyQuaternion(_qInv.copy(this.quat).invert());
+    const he = this.halfExtents;
+    const fz = (_tmp.z - this.boxCenterLocal.z) / he.z,
+      fx = _tmp.x / he.x;
+    const d = this.damage;
+    const zone = Math.abs(fz) * 1.15 > Math.abs(fx) ? (fz > 0 ? 'front' : 'rear') : fx > 0 ? 'left' : 'right';
+    d[zone] = Math.min(1, d[zone] + amount);
+    this.lastDamage += amount;
+    this.updateDamageEffects();
+  }
+
+  updateDamageEffects() {
+    const d = this.damage;
+    if (this.damageMode !== 'simulation') {
+      this.damagePower = 1;
+      this.damagePull = 0;
+      return;
+    }
+    const worst = Math.max(d.front, d.rear);
+    const k = Math.min(1, Math.max(0, (worst - 0.35) / 0.65));
+    this.damagePower = 1 - 0.22 * k * k * (3 - 2 * k);
+    // a bent corner pulls the car toward the damaged side
+    this.damagePull = 0.035 * (d.right - d.left) * (0.4 + 0.6 * d.front);
+  }
+
+  repair() {
+    const d = this.damage;
+    d.front = d.rear = d.left = d.right = 0;
+    this.updateDamageEffects();
+  }
+
+  setAssists(a) {
+    Object.assign(this.assists, a);
+  }
+  get tractionControl() {
+    return this.assists.tc;
+  }
+  set tractionControl(v) {
+    this.assists.tc = !!v;
+  }
+  get abs() {
+    return this.assists.abs;
+  }
+  set abs(v) {
+    this.assists.abs = !!v;
   }
 
   gearRatio() {
@@ -229,7 +330,7 @@ export class VehiclePhysics {
       return Math.min(tMax, pMax / w) * throttle;
     }
     const x = clamp(rpm / s.redline, 0.05, 1.05);
-    let t = s.peakTorque * torqueCurve(x);
+    let t = s.peakTorque * torqueCurve(x, s.tqPeak, s.tqFall);
     if (s.turbo) t *= 0.62 + 0.38 * this.boost;
     // engine braking when off throttle
     const brakeT = s.peakTorque * (0.12 + 0.18 * x);
@@ -253,15 +354,20 @@ export class VehiclePhysics {
     const vf = this.vel.dot(_fwd);
     this.forwardSpeed = vf;
 
-    // ---------------- steering (speed sensitive, with countersteer assist)
-    const maxSteer = 0.6 / Math.pow(1 + Math.max(0, Math.abs(vf) - 3) / 11, 0.72);
-    let target = inp.steer * maxSteer;
+    // ---------------- steering (speed-sensitive lock, optional countersteer assist)
+    const A = this.assists;
+    const steerLevel = A.steering === 'full' ? 2 : A.steering === 'normal' ? 1 : 0;
+    // a steering ratio that tightens with speed (pads / keys); raw mode keeps more lock
+    const maxSteer = 0.6 / Math.pow(1 + Math.max(0, Math.abs(vf) - 3) / 11, steerLevel === 0 ? 0.64 : 0.72);
+    let target = inp.steer * maxSteer + this.damagePull;
     const latV = this.vel.dot(_left);
     const beta = Math.abs(vf) > 2 ? Math.atan2(latV, Math.abs(vf)) : 0; // body slip (+ = sliding left)
     this.slipAngleBody = beta;
-    if (this.steerAssist && vf > 4) {
-      // wheels follow the direction of travel when sliding
-      target += clamp(-beta, -0.5, 0.5) * 0.75 * (1 - Math.abs(inp.steer) * 0.35);
+    if (steerLevel > 0 && vf > 4) {
+      // the front wheels follow the direction of travel in a slide; 'normal' lets small
+      // slides through and only catches bigger ones
+      const b = steerLevel === 2 ? beta : Math.sign(beta) * Math.max(0, Math.abs(beta) - 0.05);
+      target += clamp(-b, -0.5, 0.5) * (steerLevel === 2 ? 0.75 : 0.4) * (1 - Math.abs(inp.steer) * 0.35);
     }
     target = clamp(target, -0.65, 0.65);
     const rate = 2.6 + Math.abs(target - this.steerAngle) * 3;
@@ -300,6 +406,25 @@ export class VehiclePhysics {
       this.shiftTimer -= dt;
       throttle *= 0.0;
     }
+    // ---------------- stability control: compare the yaw rate with what the steering asks
+    // for; when the car rotates (or slides) well beyond it, add a correcting yaw moment (as
+    // from braking single wheels) and cut the throttle
+    this.aid.esc = 0;
+    let escYaw = 0;
+    if (A.stability && vf > 5 && this.grounded >= 2) {
+      const vch = 24; // characteristic speed of a mildly understeering car
+      let rDes = (-vf * Math.tan(this.steerAngle)) / s.style.WB / (1 + (vf / vch) * (vf / vch));
+      const rMax = (0.95 * s.grip * G) / vf;
+      rDes = clamp(rDes, -rMax, rMax);
+      const yawRate = this.angVel.dot(_up);
+      const err = yawRate - rDes;
+      const over = Math.max(0, Math.abs(err) - 0.14) + 2 * Math.max(0, Math.abs(beta) - 0.09);
+      if (over > 0) {
+        this.aid.esc = Math.min(1, over * 3);
+        escYaw = -Math.sign(err) * Math.min(1, over / 0.3) * this.mass * 3.2;
+        throttle *= clamp(1 - over * 2.5, 0.15, 1);
+      }
+    }
     // turbo spool
     if (s.turbo) {
       const tgt = throttle * clamp((this.rpm - s.redline * 0.25) / (s.redline * 0.35), 0, 1);
@@ -323,7 +448,7 @@ export class VehiclePhysics {
       this.rpm = Math.min(this.rpm, this.maxRpm);
     }
     this.throttleOut = throttle;
-    let engineT = this.engineTorque(Math.max(this.rpm, idle), throttle) * this.powerMul;
+    let engineT = this.engineTorque(Math.max(this.rpm, idle), throttle) * this.powerMul * this.damagePower;
     if (this.gear === 0) engineT = 0;
     const eff = 0.88;
     let wheelTorqueTotal = engineT * ratio * fd * eff;
@@ -352,7 +477,9 @@ export class VehiclePhysics {
     }
 
     // ---------------- wheels
-    const nWheelsDriven = this.wheels.filter((w) => w.driven && w.contact).length || drivenCount;
+    let nWheelsDriven = 0;
+    for (const w of this.wheels) if (w.driven && w.contact) nWheelsDriven++;
+    if (!nWheelsDriven) nWheelsDriven = drivenCount;
     let grounded = 0;
     let offroad = 0;
     const frontShare = s.drive === 'AWD' ? s.split ?? 0.4 : s.drive === 'FWD' ? 1 : 0;
@@ -424,6 +551,8 @@ export class VehiclePhysics {
       b.Fs = Math.max(0, b.Fs - diff);
     }
     const handbrake = inp.handbrake;
+    let absWork = 0,
+      tcWork = 0;
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i];
       if (!w.contact) continue;
@@ -448,10 +577,19 @@ export class VehiclePhysics {
       w.vLat = vLat;
       const Fz = Math.min(Fs, this.mass * G * 1.2);
       const loadK = 1 - 0.12 * (Fz / ((this.mass * G) / 4) - 1);
-      const mu = s.grip * offK * this.gripMul * clamp(loadK, 0.75, 1.15);
+      // standing water under the tyre: less grip as it gets deeper (aquaplaning)
+      const wet = this.seaLevel - w.point.y;
+      const wetK = wet > 0 ? 1 - 0.55 * Math.min(1, wet / 0.45) : 1;
+      const mu = s.grip * offK * this.gripMul * wetK * clamp(loadK, 0.75, 1.15);
       const maxF = mu * Fz;
-      // longitudinal
-      let Fx = 0;
+      const maxFx = maxF * 1.32; // tyres grip harder longitudinally than laterally
+      // lateral force from the slip angle (simplified magic formula)
+      const alpha = Math.atan2(vLat, Math.abs(vLong) + 0.6);
+      w.slipAngle = alpha;
+      const B = 10.5,
+        C = 1.45;
+      let Fy = -Fz * mu * Math.sin(C * Math.atan(B * alpha));
+      // longitudinal: drive, brakes, rolling resistance
       let driveShare = 0;
       if (w.driven) {
         const axleShare = w.front ? frontShare : 1 - frontShare;
@@ -459,46 +597,56 @@ export class VehiclePhysics {
         driveShare = axleShare * (otherContact ? 0.5 : 1);
         if (s.drive !== 'AWD' && nWheelsDriven === 0) driveShare = 0;
       }
-      const driveF = (wheelTorqueTotal * driveShare) / w.r;
-      Fx += driveF;
+      let driveF = (wheelTorqueTotal * driveShare) / w.r;
       const brakeBias = w.front ? 0.64 : 0.36;
       let brakeF = brake * s.brake * this.mass * G * brakeBias * 0.5;
-      if (this.abs && brakeF > maxF * 1.25) brakeF = maxF * 1.25;
-      Fx -= clamp(vLong / 0.4, -1, 1) * brakeF;
-      if (handbrake > 0 && !w.front) {
-        Fx = -clamp(vLong / 0.3, -1, 1) * maxF * 0.85;
-        w.locked = 1;
-      } else w.locked = brakeF > maxF * 1.32 ? 1 : 0;
-      Fx -= clamp(vLong, -1, 1) * 0.014 * Fz * (1 + surf.rough * 7); // rolling resistance
-      // hold the car still when parked
-      if (Math.abs(throttle) < 0.02 && Math.abs(vLong) < 1.2 && speed < 1.5) Fx -= clamp(vLong * 3, -1, 1) * maxF * 0.8;
-      // traction limit (friction ellipse: tyres grip harder longitudinally)
-      const maxFx = maxF * 1.32;
+      // ABS keeps the brake just under the lock-up point (so the car still steers)
+      if (A.abs && brakeF > maxFx * 0.96) {
+        brakeF = maxFx * 0.96;
+        absWork = Math.max(absWork, brake);
+      }
+      const handLocked = handbrake > 0 && !w.front;
+      const locked = handLocked || (brakeF > maxFx && Math.abs(vLong) > 0.5);
+      w.locked = locked ? 1 : 0;
+      let Fx = 0;
       let spinning = 0;
-      if (Math.abs(Fx) > maxFx) {
-        spinning = Math.min(1, (Math.abs(Fx) - maxFx) / maxFx);
-        if (this.tractionControl && Math.abs(driveF) > maxFx) {
-          Fx = Math.sign(Fx) * maxFx * 0.98;
-          spinning *= 0.3;
-        } else Fx = Math.sign(Fx) * maxFx * 0.9;
+      if (locked && Math.hypot(vLong, vLat) > 0.3) {
+        // a locked tyre slides: its friction opposes the contact patch's velocity
+        const vm = Math.hypot(vLong, vLat);
+        const slide = mu * Fz * 0.82;
+        Fx = (-vLong / vm) * slide;
+        Fy = (-vLat / vm) * slide;
+      } else {
+        // traction control leaves room for the cornering force the tyre is making
+        if (A.tc && driveF !== 0) {
+          const room = maxFx * Math.sqrt(Math.max(0, 1 - (Fy / maxF) * (Fy / maxF))) * 0.97;
+          if (Math.abs(driveF) > room) {
+            tcWork = Math.max(tcWork, Math.min(1, (Math.abs(driveF) - room) / maxFx + 0.3));
+            driveF = Math.sign(driveF) * Math.max(room, maxFx * 0.12);
+          }
+        }
+        Fx = driveF - clamp(vLong / 0.4, -1, 1) * brakeF;
+        Fx -= clamp(vLong, -1, 1) * 0.014 * Fz * (1 + surf.rough * 7); // rolling resistance
+        // hold the car still when parked
+        if (Math.abs(throttle) < 0.02 && Math.abs(vLong) < 1.2 && speed < 1.5) Fx -= clamp(vLong * 3, -1, 1) * maxF * 0.8;
+        // friction ellipse: the combined force can't exceed what the tyre can give; beyond
+        // it the tyre is sliding and both components shrink together (wheelspin kills
+        // cornering grip — power oversteer — unless traction control prevents it)
+        const ux = Fx / maxFx,
+          uy = Fy / maxF;
+        const m2 = ux * ux + uy * uy;
+        if (m2 > 1) {
+          const mag = Math.sqrt(m2);
+          const k = (1 - 0.1 * Math.min(1, mag - 1)) / mag;
+          if (driveF !== 0 && Math.abs(ux) > 0.2) spinning = Math.min(1, (mag - 1) * Math.abs(ux) / mag * 1.5);
+          Fx *= k;
+          Fy *= k;
+        }
       }
       w.spinning = spinning;
-      // lateral (simplified magic formula)
-      const alpha = Math.atan2(vLat, Math.abs(vLong) + 0.6);
-      w.slipAngle = alpha;
-      const B = 10.5,
-        C = 1.45;
-      let latMu = mu;
-      if (handbrake > 0 && !w.front) latMu *= 0.42;
-      let Fy = -Fz * latMu * Math.sin(C * Math.atan(B * alpha));
-      // combined slip: longitudinal force eats into lateral capacity
-      const ux = Fx / maxFx;
-      const fyMax = maxF * Math.sqrt(Math.max(0, 1 - ux * ux)) + maxF * 0.06;
-      if (Fy > fyMax) Fy = fyMax;
-      else if (Fy < -fyMax) Fy = -fyMax;
       w.slip = Math.min(1, Math.abs(alpha) * 2.2 + spinning + (w.locked ? 0.8 : 0));
-      // longitudinal force at the contact patch (full pitch transfer); lateral force raised
-      // toward the CG to limit roll-overs
+      // longitudinal force at the contact patch (full pitch transfer); lateral force at
+      // roll-centre height, about half way up to the centre of mass
       _F.copy(_f).multiplyScalar(Fx);
       this.applyForceAt(_F, w.point);
       _F.copy(_l).multiplyScalar(Fy);
@@ -511,6 +659,8 @@ export class VehiclePhysics {
       else w.omega = target;
     }
     this.grounded = grounded;
+    this.aid.abs = absWork;
+    this.aid.tcs = tcWork;
     this.offroadFactor = grounded ? offroad / grounded : this.offroadFactor;
     this.onRoad = this.offroadFactor < 0.5;
 
@@ -522,21 +672,24 @@ export class VehiclePhysics {
       this.force.addScaledVector(_up, -down);
     }
 
-    // ---------------- stability helpers
+    // ---------------- stability control / air attitude
     if (grounded === 0) {
       this.airTime += dt;
-      // gently level the car in the air so landings are on the wheels
-      _tmp.crossVectors(_up, new THREE.Vector3(0, 1, 0));
-      this.torque.addScaledVector(_tmp, this.mass * 3.0);
-      this.torque.addScaledVector(this.angVel, -this.mass * 0.35);
+      if (A.stability) {
+        // gentle attitude hold in the air so landings are on the wheels (pitch/roll only)
+        _tmp.crossVectors(_up, WORLD_UP);
+        this.torque.addScaledVector(_tmp, this.mass * 1.4);
+        _tmp2.copy(_up).multiplyScalar(this.angVel.dot(_up));
+        _tmp.subVectors(this.angVel, _tmp2);
+        this.torque.addScaledVector(_tmp, -this.mass * 0.25);
+      }
     } else {
       this.airTime = 0;
-      // yaw damping at speed when not deliberately sliding (stability assist)
-      if (this.steerAssist && handbrake === 0) {
-        const yawRate = this.angVel.dot(_up);
-        this.torque.addScaledVector(_up, -yawRate * this.mass * 0.35 * clamp(speed / 30, 0, 1));
-      }
+      if (escYaw !== 0) this.torque.addScaledVector(_up, escYaw);
     }
+
+    // ---------------- water: wading drag on the wheels, buoyancy and drag on the body
+    this.stepWater(dt);
 
     // ---------------- chassis contacts with the ground (roll-overs, bottoming out)
     this.bodyContacts = 0;
@@ -557,7 +710,10 @@ export class VehiclePhysics {
         const vt = _tmp.length();
         if (vt > 0.01) _F.addScaledVector(_tmp, (-Math.min(Fn * 0.6, vt * this.mass * 2)) / vt);
         this.applyForceAt(_F, _cp);
-        if (vn < -3) this.lastImpact = Math.max(this.lastImpact, -vn);
+        if (vn < -3 && -vn > this.lastImpact) {
+          this.lastImpact = -vn;
+          this.impactPoint.copy(_cp);
+        }
       }
     }
 
@@ -580,6 +736,68 @@ export class VehiclePhysics {
     _up.set(0, 1, 0).applyQuaternion(this.quat);
     if (_up.y < 0.3 && speed < 4) this.upsideTimer += dt;
     else this.upsideTimer = 0;
+  }
+
+  stepWater(dt) {
+    const wt = this.water;
+    const sea = this.seaLevel;
+    wt.depth = sea - this.pos.y;
+    // cheap exit when the whole car is clear of the water
+    if (this.pos.y - this.cgH - 0.2 > sea) {
+      wt.submerged = wt.wheelsWet = 0;
+      wt.floatTime = 0;
+      wt.flood = Math.max(0, wt.flood - dt * 0.2);
+      return;
+    }
+    const RHO_W = 1000;
+    // wheels pushing through water: drag grows with depth and speed squared
+    let wetWheels = 0;
+    for (const w of this.wheels) {
+      _o.copy(w.local).applyQuaternion(this.quat).add(this.pos);
+      const d = Math.min(2 * w.r, sea - (_o.y - w.suspLen - w.r));
+      if (d <= 0) continue;
+      wetWheels++;
+      _r.subVectors(_o, this.pos);
+      _vc.crossVectors(this.angVel, _r).add(this.vel);
+      const v = _vc.length();
+      if (v < 0.05) continue;
+      const F = Math.min(this.mass * 6, 9 * d * v * v + 60 * d * v);
+      _F.copy(_vc).multiplyScalar(-F / v);
+      _F.y *= 0.3;
+      this.applyForceAt(_F, _o);
+    }
+    wt.wheelsWet = wetWheels / 4;
+    // hull columns: buoyancy from the submerged part (less as the cabin floods), and drag
+    const fill = 0.42 * (1 - 0.75 * wt.flood);
+    let sub = 0;
+    for (const c of this.hullCols) {
+      _o.copy(c).applyQuaternion(this.quat).add(this.pos);
+      const h = Math.min(this.hullColH, sea - _o.y);
+      if (h <= 0) continue;
+      const frac = h / this.hullColH;
+      sub += frac;
+      _cp.copy(_o).addScaledVector(_up, h * 0.5);
+      _F.set(0, RHO_W * 9.81 * this.hullColA * h * fill, 0);
+      this.applyForceAt(_F, _cp);
+      _r.subVectors(_cp, this.pos);
+      _vc.crossVectors(this.angVel, _r).add(this.vel);
+      const v = _vc.length();
+      if (v > 0.01) {
+        // bluff-body drag on the wetted part (sideways and vertical motion damped harder)
+        const cd = 0.5 * RHO_W * 0.12 * this.hullColA * frac;
+        _F.copy(_vc).multiplyScalar(-cd * v);
+        _F.y *= 4;
+        this.applyForceAt(_F, _cp);
+      }
+    }
+    wt.submerged = sub / this.hullCols.length;
+    // afloat: no wheel on the ground and the hull in the water
+    if (this.grounded === 0 && wt.submerged > 0.08) wt.floatTime += dt;
+    else wt.floatTime = Math.max(0, wt.floatTime - dt * 2);
+    // water gets in once the sills are under; the engine drowns when the intake goes under
+    if (wt.submerged > 0.35) wt.flood = Math.min(1, wt.flood + dt * 0.12 * wt.submerged);
+    if (wt.depth > this.cgH + 0.25 && !this.spec.electric) wt.stalled = true;
+    if (wt.stalled) this.powerMul = 0;
   }
 
   shift(dir) {

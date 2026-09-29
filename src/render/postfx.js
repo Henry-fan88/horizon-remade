@@ -1,10 +1,14 @@
 // HDR render target -> bloom -> final grade (speed blur, sharpen, ACES, colour grade, vignette).
+// Bloom is a dual-filter mip chain: a thresholded half-resolution prefilter, box downsamples
+// and tent upsamples accumulated back up the chain. The final grade samples the result
+// directly, so no full-resolution bloom pass or extra full-screen blend is needed.
 import * as THREE from 'three';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { FullScreenQuad } from 'three/addons/postprocessing/Pass.js';
 
 const finalFrag = /* glsl */ `
 uniform sampler2D tDiffuse;
+uniform sampler2D tBloom;
+uniform float bloomStrength;
 uniform vec2 resolution;
 uniform float exposure;
 uniform float time;
@@ -59,6 +63,7 @@ void main() {
     }
     col = acc / 10.0;
   }
+  if ( bloomStrength > 0.0 ) col += texture2D( tBloom, uv ).rgb * bloomStrength;
   col *= exposure;
   col = aces( col / 0.6 );
   col = toSRGB( col );
@@ -75,6 +80,138 @@ void main() {
   gl_FragColor = vec4( clamp( col, 0.0, 1.0 ), 1.0 );
 }`;
 
+const quadVert = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4( position.xy, 0.0, 1.0 ); }';
+
+// source -> half resolution: 4 bilinear taps (a 4x4 texel footprint), Karis-weighted against
+// fireflies, then a soft brightness threshold
+const prefilterFrag = /* glsl */ `
+uniform sampler2D tSrc;
+uniform vec2 texel;
+uniform float threshold;
+uniform float knee;
+varying vec2 vUv;
+vec3 tap( vec2 uv ) {
+  vec3 c = texture2D( tSrc, uv ).rgb;
+  if ( any( isnan( c ) ) || any( isinf( c ) ) ) c = vec3( 0.0 );
+  return min( c, vec3( 4.0 ) );
+}
+float karis( vec3 c ) { return 1.0 / ( 1.0 + dot( c, vec3( 0.2126, 0.7152, 0.0722 ) ) ); }
+void main() {
+  vec3 a = tap( vUv + texel * vec2( -1.0, -1.0 ) ), b = tap( vUv + texel * vec2( 1.0, -1.0 ) );
+  vec3 c = tap( vUv + texel * vec2( -1.0, 1.0 ) ), d = tap( vUv + texel * vec2( 1.0, 1.0 ) );
+  float wa = karis( a ), wb = karis( b ), wc = karis( c ), wd = karis( d );
+  vec3 col = ( a * wa + b * wb + c * wc + d * wd ) / ( wa + wb + wc + wd );
+  float br = max( col.r, max( col.g, col.b ) );
+  float soft = clamp( br - threshold + knee, 0.0, 2.0 * knee );
+  soft = soft * soft / ( 4.0 * knee + 1e-4 );
+  gl_FragColor = vec4( col * max( soft, br - threshold ) / max( br, 1e-4 ), 1.0 );
+}`;
+
+// dual-filter downsample: centre x4 + four diagonal half-texel taps
+const downFrag = /* glsl */ `
+uniform sampler2D tSrc;
+uniform vec2 texel;
+varying vec2 vUv;
+void main() {
+  vec3 s = texture2D( tSrc, vUv ).rgb * 4.0;
+  s += texture2D( tSrc, vUv - texel ).rgb;
+  s += texture2D( tSrc, vUv + texel ).rgb;
+  s += texture2D( tSrc, vUv + vec2( texel.x, -texel.y ) ).rgb;
+  s += texture2D( tSrc, vUv - vec2( texel.x, -texel.y ) ).rgb;
+  gl_FragColor = vec4( s * 0.125, 1.0 );
+}`;
+
+// dual-filter (tent) upsample, blended additively onto the next level up
+const upFrag = /* glsl */ `
+uniform sampler2D tSrc;
+uniform vec2 texel;
+uniform float weight;
+varying vec2 vUv;
+void main() {
+  vec3 s = texture2D( tSrc, vUv + vec2( -texel.x * 2.0, 0.0 ) ).rgb;
+  s += texture2D( tSrc, vUv + vec2( -texel.x, texel.y ) ).rgb * 2.0;
+  s += texture2D( tSrc, vUv + vec2( 0.0, texel.y * 2.0 ) ).rgb;
+  s += texture2D( tSrc, vUv + vec2( texel.x, texel.y ) ).rgb * 2.0;
+  s += texture2D( tSrc, vUv + vec2( texel.x * 2.0, 0.0 ) ).rgb;
+  s += texture2D( tSrc, vUv + vec2( texel.x, -texel.y ) ).rgb * 2.0;
+  s += texture2D( tSrc, vUv + vec2( 0.0, -texel.y * 2.0 ) ).rgb;
+  s += texture2D( tSrc, vUv + vec2( -texel.x, -texel.y ) ).rgb * 2.0;
+  gl_FragColor = vec4( s / 12.0 * weight, 1.0 );
+}`;
+
+class Bloom {
+  constructor() {
+    this.levels = 5;
+    this.startDiv = 2; // 2 = half resolution (4 for the lite version)
+    this.targets = [];
+    const mk = (frag, extra = {}) =>
+      new FullScreenQuad(
+        new THREE.ShaderMaterial({
+          uniforms: { tSrc: { value: null }, texel: { value: new THREE.Vector2() }, ...extra },
+          vertexShader: quadVert,
+          fragmentShader: frag,
+          depthTest: false,
+          depthWrite: false,
+          toneMapped: false,
+        })
+      );
+    this.prefilter = mk(prefilterFrag, { threshold: { value: 1.05 }, knee: { value: 0.35 } });
+    this.down = mk(downFrag);
+    this.up = mk(upFrag, { weight: { value: 0.85 } });
+    this.up.material.blending = THREE.AdditiveBlending;
+    this.up.material.transparent = true;
+    this.w = this.h = 0;
+  }
+
+  setSize(w, h, lite) {
+    const levels = lite ? 3 : 5;
+    const div = lite ? 4 : 2;
+    if (w === this.w && h === this.h && levels === this.levels && div === this.startDiv && this.targets.length) return;
+    this.w = w;
+    this.h = h;
+    this.levels = levels;
+    this.startDiv = div;
+    for (const t of this.targets) t.dispose();
+    this.targets = [];
+    let tw = Math.max(1, Math.floor(w / div)),
+      th = Math.max(1, Math.floor(h / div));
+    for (let i = 0; i < levels; i++) {
+      this.targets.push(new THREE.WebGLRenderTarget(tw, th, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false }));
+      tw = Math.max(1, tw >> 1);
+      th = Math.max(1, th >> 1);
+    }
+  }
+
+  // returns the half (or quarter) resolution bloom texture
+  render(r, src, srcW, srcH) {
+    const T = this.targets;
+    // the upsample adds onto each level, so nothing may clear it in between
+    const autoClear = r.autoClear;
+    r.autoClear = false;
+    const pf = this.prefilter.material.uniforms;
+    pf.tSrc.value = src;
+    pf.texel.value.set(1 / srcW, 1 / srcH);
+    r.setRenderTarget(T[0]);
+    this.prefilter.render(r);
+    const d = this.down.material.uniforms;
+    for (let i = 1; i < T.length; i++) {
+      d.tSrc.value = T[i - 1].texture;
+      d.texel.value.set(0.5 / T[i - 1].width, 0.5 / T[i - 1].height);
+      r.setRenderTarget(T[i]);
+      this.down.render(r);
+    }
+    const u = this.up.material.uniforms;
+    for (let i = T.length - 2; i >= 0; i--) {
+      u.tSrc.value = T[i + 1].texture;
+      u.texel.value.set(0.5 / T[i + 1].width, 0.5 / T[i + 1].height);
+      r.setRenderTarget(T[i]);
+      this.up.render(r);
+    }
+    r.autoClear = autoClear;
+    return T[0].texture;
+  }
+}
+
 export class PostFX {
   constructor(renderer, opts = {}) {
     this.renderer = renderer;
@@ -83,24 +220,19 @@ export class PostFX {
     const size = renderer.getDrawingBufferSize(new THREE.Vector2());
     const w = Math.max(1, Math.floor(size.x * this.scale)),
       h = Math.max(1, Math.floor(size.y * this.scale));
-    const depthTexture = new THREE.DepthTexture(w, h);
-    depthTexture.type = THREE.FloatType;
+    // depth is only needed while rendering the scene: a renderbuffer, not a sampled texture
     this.rt = new THREE.WebGLRenderTarget(w, h, {
       type: THREE.HalfFloatType,
       samples: this.msaa,
       depthBuffer: true,
-      depthTexture,
     });
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(w, h), 0.14, 0.4, 1.05);
-    // guard the bloom chain against stray NaN/Inf pixels (one bad pixel would smear everywhere)
-    const hp = this.bloom.materialHighPassFilter;
-    hp.fragmentShader = hp.fragmentShader.replace(
-      'vec4 texel = texture2D( tDiffuse, vUv );',
-      'vec4 texel = texture2D( tDiffuse, vUv ); if ( any( isnan( texel ) ) || any( isinf( texel ) ) ) texel = vec4( 0.0 ); texel.rgb = min( texel.rgb, vec3( 4.0 ) );'
-    );
-    hp.needsUpdate = true;
+    this.bloom = new Bloom();
+    this.bloomLite = false;
+    this.bloom.setSize(w, h, false);
     this.uniforms = {
       tDiffuse: { value: null },
+      tBloom: { value: null },
+      bloomStrength: { value: 0 },
       resolution: { value: new THREE.Vector2(w, h) },
       exposure: { value: 1 },
       time: { value: 0 },
@@ -131,8 +263,15 @@ export class PostFX {
     const W = Math.max(1, Math.floor(w * this.scale)),
       H = Math.max(1, Math.floor(h * this.scale));
     this.rt.setSize(W, H);
-    this.bloom.setSize(W, H);
+    this.bloom.setSize(W, H, this.bloomLite);
     this.uniforms.resolution.value.set(W, H);
+  }
+
+  // 'full' | 'lite' | false
+  setBloom(mode) {
+    this.bloomEnabled = !!mode;
+    this.bloomLite = mode === 'lite';
+    this.bloom.setSize(this.rt.width, this.rt.height, this.bloomLite);
   }
 
   setQuality({ msaa, scale }) {
@@ -152,7 +291,10 @@ export class PostFX {
     r.setRenderTarget(this.rt);
     r.clear();
     r.render(scene, camera);
-    if (this.bloomEnabled) this.bloom.render(r, null, this.rt, dt, false);
+    if (this.bloomEnabled) {
+      this.uniforms.tBloom.value = this.bloom.render(r, this.rt.texture, this.rt.width, this.rt.height);
+      this.uniforms.bloomStrength.value = this.bloomLite ? 0.2 : 0.22;
+    } else this.uniforms.bloomStrength.value = 0;
     this.uniforms.tDiffuse.value = this.rt.texture;
     r.setRenderTarget(null);
     this.quad.render(r);

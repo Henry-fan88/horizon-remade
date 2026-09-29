@@ -432,7 +432,7 @@ export class Menus {
           h('div', { class: 'detail-kicker' }, `${spec.year} · ${spec.make.toUpperCase()}`),
           h('div', { class: 'detail-title' }, spec.model),
           img,
-          h('div', { class: 'detail-specs' }, `${Math.round(spec.powerKW * 1.341)} HP · ${spec.mass} KG · ${spec.drive} · ${spec.topKmh} KM/H · 0-100 ${spec.zeroTo100.toFixed(1)}s`)
+          h('div', { class: 'detail-specs' }, `${Math.round(spec.powerKW * 1.341)} HP · ${spec.mass} KG · ${spec.drive} · ${spec.topKmh} KM/H · 0-100 ${spec.zeroTo100 ? spec.zeroTo100.toFixed(1) + 's' : '—'}${spec.zeroTo200 ? ` · 0-200 ${spec.zeroTo200.toFixed(1)}s` : ''}`)
         ),
         h(
           'div',
@@ -671,8 +671,19 @@ export class Menus {
             [1.0, 'Expert'],
             [1.04, 'Unbeatable'],
           ]),
-          toggle('Steering assist', 'steeringAssist'),
+          select('Steering assist', 'steeringAssist', [
+            ['off', 'Off (raw)'],
+            ['normal', 'Normal'],
+            ['full', 'Full'],
+          ]),
+          toggle('Stability control', 'stability'),
           toggle('Traction control', 'tractionControl'),
+          toggle('ABS brakes', 'abs'),
+          select('Damage', 'damage', [
+            ['off', 'Off'],
+            ['cosmetic', 'Cosmetic'],
+            ['simulation', 'Simulation'],
+          ]),
           toggle('Traffic', 'traffic'),
           h('div', { class: 'sec-title' }, 'PROFILE'),
           h('label', { class: 'setting' }, h('span', {}, 'Driver name'), nameInput),

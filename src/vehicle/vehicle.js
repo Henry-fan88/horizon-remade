@@ -31,9 +31,11 @@ export class Vehicle {
     this.model = buildCar(this.spec.style, this.paint);
     this.model.group.position.copy(this.physics.cgModel).negate();
     this.root.add(this.model.group);
-    this.model.group.traverse((o) => {
-      if (o.isMesh) o.castShadow = !(Array.isArray(o.material) ? o.material.some((m) => m.transparent) : o.material.transparent);
-    });
+    // the authored car brings its own low-poly shadow caster
+    if (!this.model.group.userData.visualAsset)
+      this.model.group.traverse((o) => {
+        if (o.isMesh) o.castShadow = !(Array.isArray(o.material) ? o.material.some((m) => m.transparent) : o.material.transparent);
+      });
   }
 
   setPaint(paint) {
