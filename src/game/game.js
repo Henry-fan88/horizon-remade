@@ -11,6 +11,7 @@ import { Vehicle } from '../vehicle/vehicle.js';
 import { CAR_BY_ID } from '../vehicle/carspecs.js';
 import { buildCar } from '../vehicle/carmodel.js';
 import { preloadRealCar } from '../vehicle/realcar.js';
+import { preloadImportedCars } from '../vehicle/importedcars.js';
 import { measureAllCars } from '../vehicle/carperf.js';
 import { Effects } from '../vehicle/effects.js';
 import { Input } from '../core/input.js';
@@ -107,7 +108,7 @@ export class Game {
     this.world = new World(this.scene);
     // Load local car geometry in parallel with world generation. All car builders
     // stay synchronous, including garage thumbnails and networked vehicles.
-    const carAssetsReady = preloadRealCar();
+    const carAssetsReady = Promise.all([preloadRealCar(), preloadImportedCars()]);
     // garage figures come from driving each car's physics, not a formula
     measureAllCars();
     const surfaceAssetsReady = preloadSurfaceAssets(renderer.capabilities.getMaxAnisotropy());

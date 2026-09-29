@@ -1,7 +1,8 @@
 // Car database: body styles (for the procedural model) + physics specs.
-// The GT is a Ferrari 458 Italia with its real headline specs; the other makes/models are
-// fictional. 0-100 / 0-200 times are measured by driving the physics (see carperf.js).
+// Four cars use attributed real-car assets; the original fictional roster is retained.
+// 0-100 / 0-200 times are measured by driving the physics (see carperf.js).
 import { piClass } from '../config.js';
+import { IMPORTED_CARS } from './modelcatalog.js';
 
 // ------------------------------------------------------------------ body styles
 // All z values in metres, rear (-) to front (+), relative to the wheelbase centre.
@@ -162,9 +163,29 @@ export const STYLES = {
   },
 };
 
+// Match each new chassis to its prepared visual. The loft remains a fallback;
+// the existing styles and their handling are unchanged.
+function importedStyle(base, id) {
+  const geometry = IMPORTED_CARS[id].geometry;
+  const z = geometry.L / base.L, y = geometry.H / base.H, x = geometry.W / base.W;
+  const style = { ...base, ...geometry, visualAsset: id, sill: base.sill * y };
+  for (const key of ['top', 'belt']) style[key] = base[key].map(([a,b]) => [a*z,b*y]);
+  for (const key of ['width', 'roofW']) style[key] = base[key].map(([a,b]) => [a*z,b*x]);
+  style.cabin = Object.fromEntries(Object.entries(base.cabin).map(([key,v]) => [key,v*z]));
+  style.headlight = { ...base.headlight, y: base.headlight.y*y };
+  return style;
+}
+STYLES.shelby = importedStyle(STYLES.muscle, 'shelby-gt500');
+STYLES.gt3 = importedStyle(STYLES.gt, 'porsche-911-gt3');
+STYLES.fastback = importedStyle(STYLES.muscle, 'mustang-fastback');
+
 // ------------------------------------------------------------------ cars
 // powerKW, torque (Nm), mass (kg), topKmh target, grip (tyre mu), downforce ClA
 const RAW = [
+  // Representative road-car power and mass; suspension/grip/gearing are game tuning.
+  { id: 'shelby', make: 'Ford', model: 'Mustang Shelby GT500', year: 2020, style: 'shelby', color: '#175ca6', price: 125000, mass: 1916, powerKW: 567, redline: 7500, tqPeak: .66, tqFall: .18, turbo: false, drive: 'RWD', topKmh: 290, grip: 1.1, ClA: .65, cgH: .51, wf: .56, gears: 7, susp: 2.05, travel: .2, offroad: .25, sound: 'v8' },
+  { id: 'gt3', make: 'Porsche', model: '911 GT3', year: 2022, style: 'gt3', color: '#5f969e', price: 210000, mass: 1435, powerKW: 375, redline: 9000, tqPeak: .68, tqFall: .13, turbo: false, drive: 'RWD', topKmh: 318, grip: 1.16, ClA: 1.1, cgH: .43, wf: .39, gears: 7, susp: 2.35, travel: .17, offroad: .2, sound: 'flat6' },
+  { id: 'fastback', make: 'Ford', model: 'Mustang Fastback', year: 1967, style: 'fastback', color: '#20252b', price: 68000, mass: 1360, powerKW: 168, redline: 6000, tqPeak: .54, tqFall: .34, turbo: false, drive: 'RWD', topKmh: 205, grip: .93, ClA: .05, cgH: .54, wf: .55, gears: 4, susp: 1.55, travel: .25, offroad: .35, sound: 'v8' },
   { id: 'rally', make: 'Nordhaven', model: 'Rally RS', year: 2019, style: 'rally', color: '#1f5fff', price: 38000, mass: 1330, powerKW: 221, redline: 7400, turbo: true, drive: 'AWD', split: 0.45, topKmh: 225, grip: 1.02, ClA: 0.35, cgH: 0.5, wf: 0.58, gears: 6, susp: 1.5, travel: 0.26, offroad: 0.85, sound: 'boxer' },
   { id: 'hatch', make: 'Maxwell', model: 'Volt GTI', year: 2021, style: 'hatch', color: '#e8e8ea', price: 28000, mass: 1350, powerKW: 180, redline: 6800, turbo: true, drive: 'FWD', topKmh: 245, grip: 0.98, ClA: 0.15, cgH: 0.52, wf: 0.62, gears: 6, susp: 1.9, travel: 0.2, offroad: 0.45, sound: 'i4' },
   { id: 'jdm', make: 'Arashi', model: 'GT-R34 Kaze', year: 2002, style: 'jdm', color: '#2b3ac4', price: 72000, mass: 1560, powerKW: 250, redline: 8000, turbo: true, drive: 'AWD', split: 0.35, topKmh: 262, grip: 1.03, ClA: 0.4, cgH: 0.49, wf: 0.56, gears: 6, susp: 2.0, travel: 0.2, offroad: 0.35, sound: 'i6' },

@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { clamp, lerp, smoothstep } from '../core/math.js';
 import { buildRealCar } from './realcar.js';
+import { buildImportedCar } from './importedcars.js';
 
 // Monotone cubic interpolation over sorted [x, y] points
 export function pchip(points) {
@@ -556,9 +557,9 @@ function wingGeometry(span, chord, thick) {
 
 export function buildCar(style, paint = {}) {
   const S = style;
-  if (S.visualAsset === 'ferrari-458') {
+  if (S.visualAsset) {
     const paintMat = makePaintMaterial(paint.color ?? S.defaultColor ?? '#c81d25', paint.finish ?? 'gloss');
-    const detailed = buildRealCar(S, paint, paintMat);
+    const detailed = S.visualAsset === 'ferrari-458' ? buildRealCar(S, paint, paintMat) : buildImportedCar(S, paint, paintMat);
     if (detailed) return detailed;
     paintMat.dispose();
   }

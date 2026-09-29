@@ -8,9 +8,9 @@ and can race each other.
 The island, roads, trees, buildings, most cars, engine sounds and radio are generated
 in code. Ground and road materials combine locally bundled **CC0 photographic textures**
 with procedural detail; see [surface attribution](public/environment/surfaces/ATTRIBUTION.md).
-The starter GT uses a detailed **Ferrari 458 Italia** model by **vicent091036**,
-licensed under **CC BY 4.0**, with locally bundled assets, automotive materials, and animated
-wheels. See [model attribution](public/models/ferrari-458/ATTRIBUTION.md). Other car makes, places
+Four cars use detailed, attributed real-car models: **Ferrari 458 Italia**, **Ford Mustang Shelby GT500**, **Porsche 911 GT3**, and **1967 Ford Mustang Fastback**. The Ferrari is by **vicent091036**,
+and all four assets are licensed under **CC BY 4.0**, with locally bundled assets, automotive materials, and animated
+wheels. See [model credits](public/models/credits.html). Other car makes, places
 and music are fictional; no Forza game assets or logos are used.
 
 ![stack](https://img.shields.io/badge/three.js-r186-black) ![node](https://img.shields.io/badge/node-20.19%2B%20%7C%2022.12%2B-green)
@@ -91,7 +91,7 @@ On phones and tablets, touch controls appear automatically.
 - **Driving:** 120 Hz rigid-body physics with raycast suspension, slip-based tyres, weight
   transfer, turbo lag, an automatic or manual gearbox, handbrake drifts, and aero drag and
   downforce. Assists: steering/counter-steer, traction control and ABS.
-- **Ten cars**, including a detailed Ferrari 458 Italia visual model for the starter GT and nine
+- **Thirteen cars**, including four detailed real-car models and nine
   procedural cars, with performance index classes (D → X), stats, paint, finish and rim colours.
   The 458 uses the existing GT driving setup: handling, suspension, collision dimensions and
   progression are unchanged. Its displayed performance figures describe the game's tuning.
@@ -116,7 +116,7 @@ server/            Node server: static hosting + WebSocket multiplayer (multipla
 src/config.js      Game title, world constants, default settings (rename the game here)
 src/world/         World generation (worker), terrain, roads, sky/atmosphere, water, vegetation, props
 src/vehicle/       Car specs, procedural car models, physics, effects
-public/models/     Attributed Ferrari 458 GLB (served locally)
+public/models/     Four attributed car models, LODs and credits (served locally)
 public/draco/      Local Draco decoder and its license
 public/environment/ CC0 photographed terrain and road materials, sources and checksums
 src/game/          Game loop/state, camera, skills, events, races, AI, traffic, stunts, rewind, GPS
@@ -158,3 +158,9 @@ renaming it in `src/config.js`.
 
 A browser with WebGL2 (current Chrome, Edge, Firefox or Safari). Development and builds require
 Node.js 20.19+ within the 20.x series, or Node.js 22.12+; this matches the bundled Vite version.
+
+### Real-car expansion
+
+The Shelby GT500, 911 GT3 and 1967 Mustang Fastback are added to **My Cars** once for both new and existing saves. Existing cars, paint, credits and records are preserved. You can also test them with `?car=shelby`, `?car=gt3` and `?car=fastback`. The model studio at `/tools/car-preview.html` has a car selector, steering, wheel rotation, paint and lamp controls.
+
+Source credits, licenses and checksums live in each `public/models/<asset>/ATTRIBUTION.md`; all credits are also linked in the game. See `tools/car-assets/README.md` to reproduce the asset preparation. New car performance is game tuning; acceleration figures are measured using this game’s physics, not claimed factory test results.

@@ -30,9 +30,8 @@ function statBar(label, v) {
 }
 
 function modelCredit() {
-  return h('span', { class: 'model-credit' }, '458 model: ',
-    h('a', { href: 'https://sketchfab.com/3d-models/ferrari-458-italia-57bf6cc56931426e87494f554df1dab6', target: '_blank', rel: 'noopener noreferrer' }, 'vicent091036'),
-    ' · ', h('a', { href: 'https://creativecommons.org/licenses/by/4.0/', target: '_blank', rel: 'noopener noreferrer' }, 'CC BY 4.0'), ' · adapted');
+  return h('span', { class: 'model-credit' },
+    h('a', { href: `${import.meta.env.BASE_URL}models/credits.html`, target: '_blank', rel: 'noopener noreferrer' }, '3D model credits · CC BY 4.0'));
 }
 
 export class Menus {

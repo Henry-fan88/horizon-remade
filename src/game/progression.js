@@ -3,6 +3,9 @@ import { DEFAULT_SETTINGS } from '../config.js';
 import { CARS, CAR_BY_ID } from '../vehicle/carspecs.js';
 
 const KEY = 'horizon-remade-save-v1';
+const CAR_PACK = 'real-cars-1';
+const PACK_CARS = ['shelby', 'gt3', 'fastback'];
+const packEntries = () => PACK_CARS.map(id => ({ id, paint: { color: CAR_BY_ID[id].color, finish: 'gloss' } }));
 
 export function xpForLevel(level) {
   return 2500 + (level - 1) * 750;
@@ -17,6 +20,7 @@ export class Save {
   defaults() {
     return {
       version: 1,
+      contentPacks: [CAR_PACK],
       name: '',
       credits: 45000,
       xp: 0,
@@ -27,6 +31,7 @@ export class Save {
         { id: 'hatch', paint: { color: '#e8e8ea', finish: 'gloss' } },
         { id: 'gt', paint: { color: '#c81d25', finish: 'gloss' } },
         { id: 'rally', paint: { color: '#1f5fff', finish: 'gloss' } },
+        ...packEntries(),
       ],
       current: 1,
       records: {},
@@ -49,6 +54,13 @@ export class Save {
           out.garage = (out.garage || []).filter((g) => CAR_BY_ID[g.id]);
           if (!out.garage.length) out.garage = def.garage;
           out.current = Math.min(out.current, out.garage.length - 1);
+          // Grant this release's cars once, preserving the selected car, credits,
+          // existing paint, records and all other progress in older saves.
+          out.contentPacks = Array.isArray(d.contentPacks) ? [...d.contentPacks] : [];
+          if (!out.contentPacks.includes(CAR_PACK)) {
+            for (const car of packEntries()) if (!out.garage.some(g => g.id === car.id)) out.garage.push(car);
+            out.contentPacks.push(CAR_PACK);
+          }
           return out;
         }
       }

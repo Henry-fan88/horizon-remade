@@ -31,6 +31,7 @@
       .paint[aria-pressed="true"] { background: var(--paint); box-shadow: 0 0 0 2px #101216, 0 0 0 3px #d6deea; }
       label { font-size: 12px; display: flex; align-items: center; gap: 5px; color: #c5cdda; }
       input { accent-color: #aac2df; }
+      select { border: 1px solid #383e49; border-radius: 6px; background: #1d222b; padding: 8px 12px; color: #cbd3df; font: inherit; font-size: 12px; }
       #steer { width: 112px; }
       .checks { border-top: 1px solid #30343e; padding-top: 15px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px 28px; }
       h2 { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #8994a4; font-weight: 500; margin: 0 0 10px; }
@@ -45,17 +46,19 @@
   </head>
   <body>
     <main>
-      <header><div><span class="eyebrow">Horizon · model development</span><h1>Car model studio</h1></div><a href="../?car=gt">Back to the game ↗</a></header>
+      <header><div><span class="eyebrow">Horizon · model development</span><h1>Car model studio</h1></div><a id="game-link" href="../?car=gt">Back to the game ↗</a></header>
       <section id="stage" aria-label="Interactive car model preview">
         <div id="model-label">Loading car…</div>
         <div id="stage-hint">Drag to orbit · scroll to inspect</div>
         <div id="load-state" role="status">Loading the game’s car model…</div>
       </section>
       <div class="controls">
+        <div class="control-group"><label for="car-select">CAR <select id="car-select" aria-label="Car model"></select></label></div>
+        <div class="control-group"><label for="detail">DETAIL <select id="detail"><option value="0">Near</option><option value="60">Medium</option><option value="180">Far</option></select></label></div>
         <div class="control-group" aria-label="Camera views"><span class="control-title">VIEW</span><button data-view="hero" aria-pressed="true">¾</button><button data-view="front" aria-pressed="false">Front</button><button data-view="rear" aria-pressed="false">Rear</button><button data-view="side" aria-pressed="false">Side</button></div>
         <div class="control-group" aria-label="Paint presets"><span class="control-title">PAINT</span><button class="paint" data-paint="#c81d25" style="--paint:#c81d25" aria-label="Rosso red" aria-pressed="true"></button><button class="paint" data-paint="#e8e9e8" style="--paint:#e8e9e8" aria-label="Pearl white" aria-pressed="false"></button><button class="paint" data-paint="#e6b832" style="--paint:#e6b832" aria-label="Yellow" aria-pressed="false"></button><button class="paint" data-paint="#183d6b" style="--paint:#183d6b" aria-label="Deep blue" aria-pressed="false"></button><button class="paint" data-paint="#20232a" style="--paint:#20232a" aria-label="Graphite" aria-pressed="false"></button></div>
         <div class="control-group"><label for="steer">Steering <input id="steer" type="range" min="-32" max="32" value="0" /></label><button id="straight" title="Reset steering angle">Reset</button><label><input id="motion" type="checkbox" /> Roll wheels</label></div>
-        <div class="control-group"><label><input id="brake" type="checkbox" /> Brake</label><label><input id="night" type="checkbox" /> Night lamps</label><label><input id="reverse" type="checkbox" /> Reverse</label></div>
+        <div class="control-group"><label><input id="brake" type="checkbox" /> Brake</label><label><input id="night" type="checkbox" /> Night lamps</label><label><input id="reverse" type="checkbox" /> Reverse</label><label><input id="shadows" type="checkbox" checked /> Shadows</label></div>
       </div>
       <section class="checks" aria-label="Model contract validation"><div><h2>Model checks</h2><ul id="validation" data-status="loading" aria-live="polite"><li>Waiting for model preload…</li></ul></div><div><h2>Renderer</h2><pre id="renderer-stats">Starting WebGL…</pre><pre id="renderer-log" aria-live="polite"></pre></div></section>
       <p class="note">The same car model used in the game, shown with studio lighting. Original Ferrari 458 Italia model by <a href="https://sketchfab.com/3d-models/ferrari-458-italia-57bf6cc56931426e87494f554df1dab6" target="_blank" rel="noreferrer">vicent091036</a>, <a href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a>. Adapted for game paint, lighting and wheel animation.</p>
@@ -66,7 +69,27 @@
       import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
       import { buildCar } from '/src/vehicle/carmodel.js';
       import { preloadRealCar } from '/src/vehicle/realcar.js';
-      import { CAR_BY_ID } from '/src/vehicle/carspecs.js';
+      import { preloadImportedCars } from '/src/vehicle/importedcars.js';
+      import { MODEL_CREDITS } from '/src/vehicle/modelcatalog.js';
+      import { CARS, CAR_BY_ID } from '/src/vehicle/carspecs.js';
+
+      const detailedCars = CARS.filter(car => car.style.visualAsset);
+      const requestedCar = CAR_BY_ID[new URLSearchParams(location.search).get('car')];
+      const spec = requestedCar?.style.visualAsset ? requestedCar : CAR_BY_ID.gt;
+      const carSelect = document.querySelector('#car-select');
+      for (const car of detailedCars) carSelect.add(new Option(car.name, car.id, false, car.id === spec.id));
+      carSelect.addEventListener('change', () => {
+        const url = new URL(location.href);
+        url.searchParams.set('car', carSelect.value);
+        location.assign(url);
+      });
+      document.querySelector('#game-link').href = `../?car=${encodeURIComponent(spec.id)}`;
+      const credit = MODEL_CREDITS[spec.style.visualAsset];
+      const note = document.querySelector('.note');
+      note.replaceChildren(document.createTextNode('The same car model used in the game. Original model by '));
+      const creditLink = document.createElement('a');
+      creditLink.href = credit.url; creditLink.textContent = credit.author; creditLink.target = '_blank'; creditLink.rel = 'noreferrer';
+      note.append(creditLink, document.createTextNode(' · CC BY 4.0 · adapted for paint, lights, wheels and distance detail.'));
 
       const stage = document.querySelector('#stage');
       const validation = document.querySelector('#validation');
@@ -188,15 +211,15 @@
         };
         new ResizeObserver(resize).observe(stage);
         resize();
-        await preloadRealCar();
-        model = buildCar(CAR_BY_ID.gt.style, { color: '#c81d25', finish: 'gloss' });
+        await Promise.all([preloadRealCar(), preloadImportedCars()]);
+        model = buildCar(spec.style, { color: spec.color, finish: 'gloss' });
         validation.replaceChildren();
-        const imported = model.group.userData.visualAsset === 'ferrari-458';
-        const modelName = model.group.userData.modelName || (imported ? 'Ferrari 458 Italia' : model.group.name || 'Unnamed car model');
+        const imported = model.group.userData.visualAsset === spec.style.visualAsset;
+        const modelName = spec.name;
         document.querySelector('#model-label').textContent = modelName;
         validation.dataset.model = modelName;
         mark('Imported model loaded', imported, modelName);
-        const st = CAR_BY_ID.gt.style;
+        const st = spec.style;
         const expected = [
           [st.trackF / 2, st.wheelR, st.WB / 2], [-st.trackF / 2, st.wheelR, st.WB / 2],
           [st.trackR / 2, st.wheelRr ?? st.wheelR, -st.WB / 2], [-st.trackR / 2, st.wheelRr ?? st.wheelR, -st.WB / 2],
@@ -208,9 +231,9 @@
         mark('Four wheels match physics mounts', wheelOK, `wheelbase ${st.WB.toFixed(2)} m`);
         const bounds = new THREE.Box3().setFromObject(model.group);
         const size = bounds.getSize(new THREE.Vector3());
-        const boundsOK = [...bounds.min, ...bounds.max].every(Number.isFinite) && size.x > 1 && size.y > .8 && size.z > 3 && size.x < 4 && size.y < 3 && size.z < 7 && bounds.min.y >= -.08 && bounds.min.y <= .08;
+        const boundsOK = [...bounds.min, ...bounds.max].every(Number.isFinite) && size.x > 1 && size.y > .8 && size.z > 3 && size.x < st.W + .16 && size.y < st.H + .2 && size.z < st.L + .16 && bounds.min.y >= -.08 && bounds.min.y <= .08;
         mark('Finite bounds and tyres at floor', boundsOK, `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)} m; floor ${bounds.min.y.toFixed(3)} m`);
-        mark('Paint and lamp controls available', Boolean(model.paintMat?.color && ['tailMat', 'headMat', 'revMat'].every(k => model.lights?.[k]?.emissive)), 'paint · brake · headlamps · reverse');
+        mark('Paint and lamp controls available', Boolean(model.paintMat?.color && ['tailMat', 'headMat', 'revMat'].every(k => model.lights?.[k]?.emissive) && ['head', 'tail', 'reverse'].every(k => model.lights[k].length)), 'paint · brake · headlamps · reverse');
         const primaryMaterials = materialSet(model);
         const primaryGeometries = geometrySet(model);
         for (const material of primaryMaterials) material.addEventListener('dispose', () => materialDisposals++);
@@ -226,10 +249,18 @@
         second.paintMat.dispose();
         mark('Instances isolate paint and lamp materials', isolation);
         mark('Disposing another instance preserves this car', materialDisposals === 0 && geometryDisposals === 0, `${materialDisposals} material / ${geometryDisposals} geometry disposals`);
+        const lodCounts = [0, 60, 180].map(distance => {
+          model.setLodDistance(distance);
+          let count = 0;
+          model.group.traverseVisible(object => { if (object.isMesh && object.material.colorWrite) count += (object.geometry.index?.count ?? object.geometry.attributes.position.count) / 3; });
+          return count;
+        });
+        model.setLodDistance(0);
+        mark('Distance detail reduces visible geometry', lodCounts[0] > lodCounts[1] && lodCounts[1] > lodCounts[2] && lodCounts[2] > 1000, lodCounts.map(n => Math.round(n).toLocaleString()).join(' → '));
         model.group.traverse(o => {
           if (!o.isMesh) return;
           const materials = Array.isArray(o.material) ? o.material : [o.material];
-          o.castShadow = materials.every(material => !material.transparent);
+          if (!model.group.userData.visualAsset) o.castShadow = materials.every(material => !material.transparent);
           o.receiveShadow = true;
         });
         scene.add(model.group);
@@ -244,7 +275,12 @@
           model.paintMat.color.set(button.dataset.paint);
           document.querySelectorAll('[data-paint]').forEach(paint => paint.setAttribute('aria-pressed', String(paint === button)));
         }));
+        document.querySelectorAll('[data-paint]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.paint === spec.color)));
+        document.querySelector('#detail').addEventListener('change', event => model.setLodDistance?.(Number(event.target.value)));
         document.querySelector('#straight').addEventListener('click', () => { document.querySelector('#steer').value = '0'; });
+        document.querySelector('#shadows').addEventListener('change', event => {
+          model.group.traverse(object => { if (object.isMesh) { object.receiveShadow = event.target.checked; object.material.needsUpdate = true; } });
+        });
         const steer = document.querySelector('#steer'), motion = document.querySelector('#motion');
         const brake = document.querySelector('#brake'), night = document.querySelector('#night'), reverse = document.querySelector('#reverse');
         renderer.setAnimationLoop(now => {
