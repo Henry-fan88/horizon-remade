@@ -1,7 +1,7 @@
 {
   "license": "CC0-1.0",
   "licenseURL": "https://polyhaven.com/license",
-  "retrieved": "2026-09-28",
+  "retrieved": "2026-09-29",
   "assets": [
     {
       "id": "aerial_grass_rock",
@@ -34,6 +34,14 @@
           "sourceMD5": "f78c5cdc565f990299ae7c5a81f68cf7",
           "sha256": "8fe5be0d8f9f8de797e57e87903966aa829f25771c9827dc17f841ccddf80f0c",
           "bytes": 314144
+        },
+        {
+          "map": "Displacement",
+          "file": "aerial_grass_rock_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/aerial_grass_rock/aerial_grass_rock_disp_1k.jpg",
+          "sourceMD5": "1c94b490268e4fca333e3d8d4afac033",
+          "sha256": "94d47a969bfc883537d8a35c40552c5bd1f7cf4bc6305ca249fb65682b7e1f78",
+          "bytes": 143627
         }
       ]
     },
@@ -68,6 +76,14 @@
           "sourceMD5": "d936d6760ce0f899b131d30626d52ce9",
           "sha256": "fb89aa04bbfe5b8f1cc95749af6c2b4b5ef21a1a7188c59755f4ac6ac0ddd63b",
           "bytes": 80313
+        },
+        {
+          "map": "Displacement",
+          "file": "dirt_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dirt/dirt_disp_1k.jpg",
+          "sourceMD5": "0148df38efe0dfd31995d541d11746a8",
+          "sha256": "3a05d47c90fbc6bc81e26044a55cfa5de94625b3ecd4b818a4922c19439f37f1",
+          "bytes": 172365
         }
       ]
     },
@@ -102,6 +118,14 @@
           "sourceMD5": "9c0ebb95db6ce5ec16abca0899e506a2",
           "sha256": "33fc249760013dd8316836478b6defa1954e5205cc8070cb467dc230e3926567",
           "bytes": 56422
+        },
+        {
+          "map": "Displacement",
+          "file": "rock_face_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_face/rock_face_disp_1k.jpg",
+          "sourceMD5": "d62dbfc8ac05ec72c2b66f862028c03c",
+          "sha256": "74ac35b8a1bcc56dea951e6eae5fb84c7b8e6cb15b221c00a8c5074304a47410",
+          "bytes": 129982
         }
       ]
     },
@@ -136,6 +160,284 @@
           "sourceMD5": "ec80a2929797c1b3ffc121c4f665585a",
           "sha256": "394f1dccee74eaa6c0a63171c8e8e0e27f2f87e060140804bf43c9d548c3a068",
           "bytes": 484444
+        },
+        {
+          "map": "Displacement",
+          "file": "asphalt_02_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/asphalt_02/asphalt_02_disp_1k.jpg",
+          "sourceMD5": "2699b93c9eacfcf2e10582bccf849287",
+          "sha256": "592c7724a0425b25e7fc5421ce02142a3ad2ed4c99deef101d3c874c0c46c233",
+          "bytes": 307113
+        }
+      ]
+    },
+    {
+      "id": "forrest_ground_01",
+      "role": "forest",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/forrest_ground_01",
+      "api": "https://api.polyhaven.com/files/forrest_ground_01",
+      "sourceTileMeters": 2,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "forrest_ground_01_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forrest_ground_01/forrest_ground_01_diff_1k.jpg",
+          "sourceMD5": "236e7d928f5e357a194fd92de189cbe4",
+          "sha256": "b4195f831e67f7b4d21619a91dbe86c87680e83af91907ac74cb1ee4dc9f495f",
+          "bytes": 778780
+        },
+        {
+          "map": "nor_gl",
+          "file": "forrest_ground_01_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forrest_ground_01/forrest_ground_01_nor_gl_1k.jpg",
+          "sourceMD5": "ba4265df25aea293913d004b69ef9ab0",
+          "sha256": "788355156a13ccaafe8217cdc26fa07a4f5a61d98f818e909c5ff0ed157af06a",
+          "bytes": 1473728
+        },
+        {
+          "map": "Rough",
+          "file": "forrest_ground_01_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forrest_ground_01/forrest_ground_01_rough_1k.jpg",
+          "sourceMD5": "72dacf5b829cafc025f08ca64e92e5eb",
+          "sha256": "ffbca282d6bdafa16eaed62a09f47c3f0278ec2c12fb5ef4e17584ffbb7ea467",
+          "bytes": 219076
+        },
+        {
+          "map": "Displacement",
+          "file": "forrest_ground_01_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/forrest_ground_01/forrest_ground_01_disp_1k.jpg",
+          "sourceMD5": "2ef1913c910da346874776055ae6cc83",
+          "sha256": "46b66babe7f4f125a3e8828fdd720a4d868413f916cd6c5ff21b9c2a0ef1459d",
+          "bytes": 276994
+        }
+      ]
+    },
+    {
+      "id": "dry_ground_rocks",
+      "role": "dry",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/dry_ground_rocks",
+      "api": "https://api.polyhaven.com/files/dry_ground_rocks",
+      "sourceTileMeters": 4,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "dry_ground_rocks_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dry_ground_rocks/dry_ground_rocks_diff_1k.jpg",
+          "sourceMD5": "7cc10e3eb12ce7bb8235d3e3c3041ded",
+          "sha256": "6de5046b7bcba10770c65db637285dcbf0d95af3182d206a42507d9e563e92e8",
+          "bytes": 768315
+        },
+        {
+          "map": "nor_gl",
+          "file": "dry_ground_rocks_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dry_ground_rocks/dry_ground_rocks_nor_gl_1k.jpg",
+          "sourceMD5": "7f2d336686d4b5e380ba76c5e3ddd4bb",
+          "sha256": "ce398bcb3dcd26c30630fc9bf298c57a5510fbb8aaa5e1f72bc3bb0ce248e7c1",
+          "bytes": 1292382
+        },
+        {
+          "map": "Rough",
+          "file": "dry_ground_rocks_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dry_ground_rocks/dry_ground_rocks_rough_1k.jpg",
+          "sourceMD5": "0f5d1be1483fc6ccd5971a724b178129",
+          "sha256": "1c77d42fef9e22d21c807dcc20fff1854ab46b5d7e1c2e8349b991c2e27958e0",
+          "bytes": 399428
+        },
+        {
+          "map": "Displacement",
+          "file": "dry_ground_rocks_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/dry_ground_rocks/dry_ground_rocks_disp_1k.jpg",
+          "sourceMD5": "1259830e86af3896a2222579df1df9a6",
+          "sha256": "b56423853908d00d690bd20883c1faf9e5422bd3c3adaafaad842e0bafd2f067",
+          "bytes": 227834
+        }
+      ]
+    },
+    {
+      "id": "sand_01",
+      "role": "sand",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/sand_01",
+      "api": "https://api.polyhaven.com/files/sand_01",
+      "sourceTileMeters": 1.5,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "sand_01_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_01/sand_01_diff_1k.jpg",
+          "sourceMD5": "c914c8edb419f040e04224081a3f79a5",
+          "sha256": "1a3e51f4cabcc7762d15ab351a90c05cfc48957eaa2c26f4f7cf1393e443ad6c",
+          "bytes": 430883
+        },
+        {
+          "map": "nor_gl",
+          "file": "sand_01_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_01/sand_01_nor_gl_1k.jpg",
+          "sourceMD5": "369b82aa417c77ec85c4c07c4c7b60a0",
+          "sha256": "5a98737f0cb1bbed3aac3cf9b82d366e2c8d7c037bdd9aacec2bbd539244700c",
+          "bytes": 890585
+        },
+        {
+          "map": "Rough",
+          "file": "sand_01_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_01/sand_01_rough_1k.jpg",
+          "sourceMD5": "663d0ddf782a427b7da4e247c939e73b",
+          "sha256": "fedf780347a320edb5d1bbc1471415fe7af852f779c92869bba035fe3330e28f",
+          "bytes": 152431
+        },
+        {
+          "map": "Displacement",
+          "file": "sand_01_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/sand_01/sand_01_disp_1k.jpg",
+          "sourceMD5": "53f6887f6d9c9dc7a8a46f26f67046a1",
+          "sha256": "b3f24f00b30430346c1d24e07f2be9ca65fb03d634fd95efe9c4ddc351383495",
+          "bytes": 143620
+        }
+      ]
+    },
+    {
+      "id": "snow_02",
+      "role": "snow",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/snow_02",
+      "api": "https://api.polyhaven.com/files/snow_02",
+      "sourceTileMeters": 2,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "snow_02_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/snow_02/snow_02_diff_1k.jpg",
+          "sourceMD5": "fc54766c6b36ff298699115a619d440b",
+          "sha256": "34ce445ebc78f996f5847bdcd3002c747b780ebffb0ad104dd26b6142f6a5cac",
+          "bytes": 290255
+        },
+        {
+          "map": "nor_gl",
+          "file": "snow_02_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/snow_02/snow_02_nor_gl_1k.jpg",
+          "sourceMD5": "f16b5701f9ad521cdd6af10c1d6d2b48",
+          "sha256": "1ed779cec9a3c80cff7fb3ed06d0ff0f7355856bf86e5e61e212be283d183c75",
+          "bytes": 1106831
+        },
+        {
+          "map": "Rough",
+          "file": "snow_02_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/snow_02/snow_02_rough_1k.jpg",
+          "sourceMD5": "1dbae0269e53dbf80d4fd1c4335f25a2",
+          "sha256": "293ad7c8ecf95670a0ff8e76a600d3ec4bd86837d3d41f40bb2541f4c9cc41e1",
+          "bytes": 124114
+        },
+        {
+          "map": "Displacement",
+          "file": "snow_02_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/snow_02/snow_02_disp_1k.jpg",
+          "sourceMD5": "d2133b5c5a7fb3515ae538ceb4e25308",
+          "sha256": "c76222f159a4b70e777ce48aec30b3ba1fc050ffb812f188f162626c9d7ebb8b",
+          "bytes": 118456
+        }
+      ]
+    },
+    {
+      "id": "gravel_road",
+      "role": "gravel",
+      "author": "Amal Kumar",
+      "source": "https://polyhaven.com/a/gravel_road",
+      "api": "https://api.polyhaven.com/files/gravel_road",
+      "sourceTileMeters": 2,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "gravel_road_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_road/gravel_road_diff_1k.jpg",
+          "sourceMD5": "d259491a6cb5ca0e96d3941758f8bb47",
+          "sha256": "7c3ee31937c9d2b6087ade4a0a05cf0041cf71b25d38f38cbcd8e61e813451b8",
+          "bytes": 276147
+        },
+        {
+          "map": "nor_gl",
+          "file": "gravel_road_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_road/gravel_road_nor_gl_1k.jpg",
+          "sourceMD5": "6be4a6d4c869c9714c0224619d587837",
+          "sha256": "1a955d6aa911f47ee8a8de298084b8a67380bd3eaac10dc35ea42329f3122c63",
+          "bytes": 498032
+        },
+        {
+          "map": "Rough",
+          "file": "gravel_road_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_road/gravel_road_rough_1k.jpg",
+          "sourceMD5": "2666aa6329169e7a8a24b892a977c2b1",
+          "sha256": "a3b895e3fd7c3a3fabce84e5a563a8876a0c28887f3da81415a14e272ddc8ee9",
+          "bytes": 136003
+        },
+        {
+          "map": "Displacement",
+          "file": "gravel_road_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/gravel_road/gravel_road_disp_1k.jpg",
+          "sourceMD5": "281849f8b5dff149e2da87925aa00fa6",
+          "sha256": "7d5892a33056232950243da21006f0125df31492fcbf8cfb6c45aa2e15e57072",
+          "bytes": 181140
+        }
+      ]
+    },
+    {
+      "id": "rock_boulder_dry",
+      "role": "redrock",
+      "author": "Dimitrios Savva, Rico Cilliers",
+      "source": "https://polyhaven.com/a/rock_boulder_dry",
+      "api": "https://api.polyhaven.com/files/rock_boulder_dry",
+      "sourceTileMeters": 1.8,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "rock_boulder_dry_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_diff_1k.jpg",
+          "sourceMD5": "da794cd9be3db91e3160cf081109f322",
+          "sha256": "6e858ec7f6bddf17bd07a8a8110656a88d3f7f7a3a98b2e04e5e154fd0bb0a1b",
+          "bytes": 419914
+        },
+        {
+          "map": "nor_gl",
+          "file": "rock_boulder_dry_nor_gl_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_nor_gl_1k.jpg",
+          "sourceMD5": "6f1c575ceed560ae253f65518cf748e2",
+          "sha256": "98ff7bccd2f5433618a1ce8a6760123c2581c8f53ccb5d086d32c28f37a0f9fa",
+          "bytes": 368146
+        },
+        {
+          "map": "Rough",
+          "file": "rock_boulder_dry_rough_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_rough_1k.jpg",
+          "sourceMD5": "0c8b15df3e31c15256da5f8e1b0d0759",
+          "sha256": "cda7ad8966307cb09b4341a9c27ba547d20fea8ccf6c4c8254134b1eda2c0249",
+          "bytes": 341425
+        },
+        {
+          "map": "Displacement",
+          "file": "rock_boulder_dry_disp_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/rock_boulder_dry/rock_boulder_dry_disp_1k.jpg",
+          "sourceMD5": "a1d49d14ad2948ccdeb692d53b0664a8",
+          "sha256": "6805df9b744833266c3e8f50a1a6a227d894e766ffad400c499f90b694cd0def",
+          "bytes": 99951
+        }
+      ]
+    },
+    {
+      "id": "aerial_asphalt_01",
+      "role": "asphaltMacro",
+      "author": "Rob Tuytel",
+      "source": "https://polyhaven.com/a/aerial_asphalt_01",
+      "api": "https://api.polyhaven.com/files/aerial_asphalt_01",
+      "sourceTileMeters": 30,
+      "maps": [
+        {
+          "map": "Diffuse",
+          "file": "aerial_asphalt_01_diff_1k.jpg",
+          "sourceURL": "https://dl.polyhaven.org/file/ph-assets/Textures/jpg/1k/aerial_asphalt_01/aerial_asphalt_01_diff_1k.jpg",
+          "sourceMD5": "b41fc0114556f15fe59b260cf0978b89",
+          "sha256": "a65c7fac4e9e669e285bdb55dca454bf23667a903b82a38f1709990ca5557167",
+          "bytes": 578244
         }
       ]
     }

@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { VehiclePhysics } from './vehiclephysics.js';
 import { buildCar } from './carmodel.js';
+import { setInteriorView } from './cockpit.js';
 import { clamp } from '../core/math.js';
 
 export class Vehicle {
@@ -30,12 +31,19 @@ export class Vehicle {
     }
     this.model = buildCar(this.spec.style, this.paint);
     this.model.group.position.copy(this.physics.cgModel).negate();
+    if (this.interior) setInteriorView(this.model, true);
     this.root.add(this.model.group);
     // the authored car brings its own low-poly shadow caster
     if (!this.model.group.userData.visualAsset)
       this.model.group.traverse((o) => {
         if (o.isMesh) o.castShadow = !(Array.isArray(o.material) ? o.material.some((m) => m.transparent) : o.material.transparent);
       });
+  }
+
+  // in-car camera: render the cabin from inside (shell inner faces, clear glass, gauges)
+  setInteriorView(on) {
+    this.interior = on;
+    setInteriorView(this.model, on);
   }
 
   setPaint(paint) {
@@ -85,10 +93,15 @@ export class Vehicle {
       if (w.front) mw.steer.rotation.y = -w.steer;
       mw.spin.rotation.x = w.angle;
     }
+    // steering wheel: counter-clockwise (about the column, towards the driver) turns left
+    const sw = this.model.steeringWheel;
+    if (sw) sw.rotation.z = -p.steerAngle * (this.spec.style.cockpit?.ratio ?? 14);
+    if (this.interior) this.model.updateCockpit?.(p.forwardSpeed * 3.6, p.rpm, this.lightsOn);
   }
 
   updateLights(dt, nightLights, reverse, braking) {
     const L = this.model.lights;
+    this.lightsOn = nightLights;
     this.braking += ((braking ? 1 : 0) - this.braking) * Math.min(1, dt * 18);
     L.tailMat.emissiveIntensity = (nightLights ? 1.4 : 0.5) + this.braking * 5.5;
     L.revMat.emissiveIntensity = reverse ? 3 : 0;

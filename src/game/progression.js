@@ -3,9 +3,16 @@ import { DEFAULT_SETTINGS } from '../config.js';
 import { CARS, CAR_BY_ID } from '../vehicle/carspecs.js';
 
 const KEY = 'horizon-remade-save-v1';
-const CAR_PACK = 'real-cars-1';
-const PACK_CARS = ['shelby', 'gt3', 'fastback'];
-const packEntries = () => PACK_CARS.map(id => ({ id, paint: { color: CAR_BY_ID[id].color, finish: 'gloss' } }));
+// Cars granted once per content pack: new saves start with them, older saves receive them
+// on their next load (a pack whose cars are not in this build is skipped).
+const CAR_PACKS = [
+  { id: 'real-cars-1', cars: ['shelby', 'gt3', 'fastback'] },
+  { id: 'formula-1', cars: ['f1'] },
+  { id: 'modern-formula-2023', cars: ['sf23', 'rb19'] },
+]
+  .map((p) => ({ ...p, cars: p.cars.filter((id) => CAR_BY_ID[id]) }))
+  .filter((p) => p.cars.length);
+const packEntries = (pack) => pack.cars.map((id) => ({ id, paint: { color: CAR_BY_ID[id].color, finish: 'gloss' } }));
 
 export function xpForLevel(level) {
   return 2500 + (level - 1) * 750;
@@ -20,7 +27,7 @@ export class Save {
   defaults() {
     return {
       version: 1,
-      contentPacks: [CAR_PACK],
+      contentPacks: CAR_PACKS.map((p) => p.id),
       name: '',
       credits: 45000,
       xp: 0,
@@ -28,12 +35,10 @@ export class Save {
       wheelspins: 2,
       superWheelspins: 0,
       garage: [
-        { id: 'hatch', paint: { color: '#e8e8ea', finish: 'gloss' } },
         { id: 'gt', paint: { color: '#c81d25', finish: 'gloss' } },
-        { id: 'rally', paint: { color: '#1f5fff', finish: 'gloss' } },
-        ...packEntries(),
+        ...CAR_PACKS.flatMap(packEntries),
       ],
-      current: 1,
+      current: 0,
       records: {},
       raceRecords: {},
       boards: [],
@@ -51,15 +56,20 @@ export class Save {
         if (d && d.version === 1) {
           const def = this.defaults();
           const out = { ...def, ...d, stats: { ...def.stats, ...d.stats }, settings: { ...def.settings, ...d.settings } };
+          // Cars that are no longer in the game (the original fictional roster) leave the
+          // garage; the selection follows the car the player was driving, else the Ferrari.
+          const selected = Array.isArray(d.garage) ? d.garage[d.current] : null;
           out.garage = (out.garage || []).filter((g) => CAR_BY_ID[g.id]);
           if (!out.garage.length) out.garage = def.garage;
-          out.current = Math.min(out.current, out.garage.length - 1);
+          const keep = selected ? out.garage.indexOf(selected) : -1;
+          out.current = keep >= 0 ? keep : Math.max(0, out.garage.findIndex((g) => g.id === 'gt'));
           // Grant this release's cars once, preserving the selected car, credits,
           // existing paint, records and all other progress in older saves.
           out.contentPacks = Array.isArray(d.contentPacks) ? [...d.contentPacks] : [];
-          if (!out.contentPacks.includes(CAR_PACK)) {
-            for (const car of packEntries()) if (!out.garage.some(g => g.id === car.id)) out.garage.push(car);
-            out.contentPacks.push(CAR_PACK);
+          for (const pack of CAR_PACKS) {
+            if (out.contentPacks.includes(pack.id)) continue;
+            for (const car of packEntries(pack)) if (!out.garage.some((g) => g.id === car.id)) out.garage.push(car);
+            out.contentPacks.push(pack.id);
           }
           return out;
         }

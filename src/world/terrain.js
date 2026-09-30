@@ -1,7 +1,7 @@
 // Chunked terrain with 4 LOD levels + skirts. LOD0 uses the exact heightfield
 // triangulation (anti-diagonal split) so wheels sit exactly on the rendered surface.
 import * as THREE from 'three';
-import { getSurfaceAssets } from './surface-assets.js';
+import { getSurfaceAssets, getTerrainArrays, TERRAIN_LAYERS } from './surface-assets.js';
 import { SURF } from './worldgen.js';
 import { useFarShadow } from '../render/farshadow.js';
 
@@ -90,6 +90,266 @@ function createBiomeMask(world, hf) {
   texture.generateMipmaps = false;
   texture.needsUpdate = true;
   return texture;
+}
+
+function maskTexture(data, res, name) {
+  const texture = new THREE.DataTexture(data, res + 1, res + 1, THREE.RGBAFormat);
+  texture.name = name;
+  texture.minFilter = texture.magFilter = THREE.LinearFilter;
+  texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+// Splat masks for the layered terrain: bare ground types (rock, sand, pavement, soil),
+// cover types (snow, forest floor, dry ground, gravel) and region (canyon, alpine, circuit).
+function createLayerMasks(world, hf) {
+  const n = world.surface.length;
+  const a = new Uint8Array(n * 4),
+    b = new Uint8Array(n * 4),
+    r = new Uint8Array(n * 4);
+  const on = (v) => (v ? 255 : 0);
+  for (let i = 0; i < n; i++) {
+    const s = world.surface[i];
+    a[i * 4] = on(s === SURF.ROCK || s === SURF.ASH);
+    a[i * 4 + 1] = on(s === SURF.SAND);
+    a[i * 4 + 2] = on(s === SURF.PAVE || s === SURF.ROAD);
+    a[i * 4 + 3] = on(s === SURF.DIRT || s === SURF.MUD);
+    b[i * 4] = on(s === SURF.SNOW);
+    b[i * 4 + 1] = on(s === SURF.FOREST);
+    b[i * 4 + 2] = on(s === SURF.DRY);
+    b[i * 4 + 3] = on(s === SURF.GRAVEL || s === SURF.DIRTROAD || s === SURF.VERGE);
+    const reg = world.regionMap ? world.regionMap[i] : 0;
+    r[i * 4] = on(reg === 3);
+    r[i * 4 + 1] = on(reg === 1);
+    r[i * 4 + 2] = on(reg === 2);
+    r[i * 4 + 3] = on(s === SURF.MUD);
+  }
+  return [maskTexture(a, hf.res, 'terrain-ground'), maskTexture(b, hf.res, 'terrain-cover'), maskTexture(r, hf.res, 'terrain-region')];
+}
+
+// Ten photographic layers from two texture arrays (albedo+roughness, normal+height),
+// splatted by the masks, blended by height so stones and tufts break up the edges,
+// sampled with a per-area offset against visible tiling, and graded to each biome's
+// palette from the vertex colours. Beyond ~350 m the palette and macro variation alone
+// are drawn (the scans average out to that anyway).
+function createLayeredTerrainMaterial(detailTex, world, hf, arrays) {
+  const masks = createLayerMasks(world, hf);
+  const mat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0 });
+  mat.name = 'Layered photographic terrain';
+  mat.userData.surfaceMode = 'layered-pbr';
+  mat.userData.layers = { arrays, masks }; // for inspection in dev tools
+  mat.addEventListener('dispose', () => masks.forEach((m) => m.dispose()));
+  const idx = Object.fromEntries(TERRAIN_LAYERS.map((l, i) => [l.key, i]));
+  const N = TERRAIN_LAYERS.length;
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, {
+      tDetail: { value: detailTex },
+      tMaskGround: { value: masks[0] },
+      tMaskCover: { value: masks[1] },
+      tMaskRegion: { value: masks[2] },
+      terrainMaskTransform: { value: new THREE.Vector2(1 / (hf.cell * (hf.res + 1)), (hf.half / hf.cell + 0.5) / (hf.res + 1)) },
+      tLayerAlbedo: { value: arrays.albedo },
+      tLayerNormal: { value: arrays.normal },
+      layerMean: { value: arrays.mean },
+      layerTile: { value: TERRAIN_LAYERS.map((l) => l.tile) },
+      layerTint: { value: TERRAIN_LAYERS.map((l) => l.tint) },
+    });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>
+attribute vec4 tcolor;
+varying vec4 vTColor;
+varying vec3 vTPos;
+varying vec3 vTNrm;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+vTColor = tcolor;
+vTPos = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+vTNrm = normalize( mat3( modelMatrix ) * normal );`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+#define LAYERS ${N}
+#define L_GRASS ${idx.grass}.0
+#define L_SOIL ${idx.soil}.0
+#define L_ROCK ${idx.rock}.0
+#define L_PAVE ${idx.pave}.0
+#define L_FOREST ${idx.forest}.0
+#define L_DRY ${idx.dry}.0
+#define L_SAND ${idx.sand}.0
+#define L_SNOW ${idx.snow}.0
+#define L_GRAVEL ${idx.gravel}.0
+#define L_REDROCK ${idx.redrock}.0
+uniform sampler2D tDetail;
+uniform sampler2D tMaskGround;
+uniform sampler2D tMaskCover;
+uniform sampler2D tMaskRegion;
+uniform vec2 terrainMaskTransform;
+uniform highp sampler2DArray tLayerAlbedo;
+uniform highp sampler2DArray tLayerNormal;
+uniform vec3 layerMean[ LAYERS ];
+uniform float layerTile[ LAYERS ];
+uniform float layerTint[ LAYERS ];
+varying vec4 vTColor;
+varying vec3 vTPos;
+varying vec3 vTNrm;
+const vec3 terrainLuma = vec3( 0.2126, 0.7152, 0.0722 );
+
+// Albedo without visible repeats: two copies at area-dependent offsets are blended where
+// a low-frequency noise changes its index (after Inigo Quilez, "texture repetition").
+vec4 layerAlbedo( float layer, vec2 uv, float near ) {
+  vec2 dx = dFdx( uv ), dy = dFdy( uv );
+  if ( near < 0.01 ) return textureGrad( tLayerAlbedo, vec3( uv, layer ), dx, dy );
+  float k = texture2D( tDetail, uv * 0.031 + layer * 0.17 ).r * 8.0;
+  float ia = floor( k ), f = fract( k );
+  vec2 oa = sin( vec2( 3.0, 7.0 ) * ia ), ob = sin( vec2( 3.0, 7.0 ) * ( ia + 1.0 ) );
+  vec4 ca = textureGrad( tLayerAlbedo, vec3( uv + oa, layer ), dx, dy );
+  vec4 cb = textureGrad( tLayerAlbedo, vec3( uv + ob, layer ), dx, dy );
+  return mix( ca, cb, smoothstep( 0.2, 0.8, f - 0.1 * dot( ca.rgb - cb.rgb, vec3( 1.0 ) ) ) );
+}
+
+// Grade a scan to the biome colour: keep its luminance detail and some of its own chroma.
+vec3 gradeLayer( vec3 s, int i, vec3 tint ) {
+  vec3 m = max( layerMean[ i ], vec3( 1e-3 ) );
+  float value = dot( s, terrainLuma ) / dot( m, terrainLuma );
+  vec3 detail = mix( vec3( value ), s / m, 0.35 );
+  return mix( s, tint * clamp( detail, vec3( 0.2 ), vec3( 3.2 ) ), layerTint[ i ] );
+}
+
+// height-aware blend: at half coverage the layer's high spots show through
+float heightBlend( float a, float h ) {
+  return clamp( ( a - 0.5 ) * 2.2 + ( h - 0.5 ) * 1.6 + 0.5, 0.0, 1.0 ) * smoothstep( 0.0, 0.12, a );
+}
+
+vec3 groundNormal( vec3 mapN, vec3 baseN, float strength ) {
+  vec3 n = mapN * 2.0 - 1.0;
+  n.xy *= strength;
+  vec3 t = normalize( vec3( max( baseN.y, 0.001 ), -baseN.x, 0.0 ) );
+  vec3 b = normalize( cross( baseN, t ) );
+  return normalize( t * n.x + b * n.y + baseN * n.z );
+}`)
+      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', `
+vec3 tN0 = normalize( vTNrm );
+float tDist = length( vTPos - cameraPosition );
+float tNear = 1.0 - smoothstep( 25.0, 90.0, tDist );
+float tFine = 1.0 - smoothstep( 40.0, 170.0, tDist );
+float tFar = smoothstep( 250.0, 400.0, tDist );
+vec2 tMuv = vTPos.xz * terrainMaskTransform.x + terrainMaskTransform.y;
+vec4 mG = texture2D( tMaskGround, tMuv );
+vec4 mC = texture2D( tMaskCover, tMuv );
+vec4 mR = texture2D( tMaskRegion, tMuv );
+vec4 tMacro = texture2D( tDetail, vTPos.xz * 0.006 );
+vec4 tMacro2 = texture2D( tDetail, vTPos.xz * 0.0011 + 0.37 );
+vec4 tNoise = texture2D( tDetail, vTPos.xz * 0.071 );
+float tSlope = 1.0 - max( 0.0, tN0.y );
+
+// biome palette (sRGB vertex colour -> linear), with large-scale variation
+vec3 tOrig = pow( vTColor.rgb, vec3( 2.2 ) );
+float tValue = dot( tOrig, terrainLuma );
+vec3 tTint = mix( vec3( tValue ), tOrig, 0.78 );
+tTint *= 0.93 + ( tMacro.r - 0.5 ) * 0.2 + ( tMacro2.g - 0.5 ) * 0.16;
+
+// coverage of each layer
+float wRock = max( mG.r, smoothstep( 0.22, 0.43, tSlope + ( tNoise.r - 0.5 ) * 0.065 ) );
+float wSnow = mC.r * ( 1.0 - smoothstep( 0.55, 0.8, tSlope ) );
+float wPave = mG.b;
+float wSand = mG.g * ( 1.0 - wPave );
+wRock *= 1.0 - max( wPave, max( wSand, wSnow ) );
+float wGravel = mC.a * ( 1.0 - wPave ) * ( 1.0 - wRock );
+float wGrass = smoothstep( 0.12, 0.82, vTColor.a + ( tNoise.g - 0.5 ) * 0.24 ) * ( 1.0 - max( mG.a, max( wSand, wPave ) ) ) * ( 1.0 - wGravel );
+float wForest = mC.g * ( 1.0 - wRock ) * ( 1.0 - wSnow );
+float wDry = mC.b * ( 1.0 - wRock ) * ( 1.0 - wSnow );
+float wCanyon = mR.r;
+float tWet = max( mR.a * 0.8, 1.0 - smoothstep( 0.05, 0.85, vTPos.y ) );
+
+vec3 tAlbedo = tTint;
+float tRough = 0.93;
+vec3 tNsum = vec3( 0.0, 0.0, 1.0 ); // accumulated tangent-space normal for planar layers
+float tNw = 0.0;
+vec3 tRockN = tN0;
+float tRockW = 0.0;
+if ( tFar < 0.99 ) {
+  vec2 wxz = vTPos.xz * vec2( 1.0, -1.0 );
+  // planar layers, bottom to top: soil, dry, forest floor, grass, gravel, sand, snow, pavement
+  float ord[ 8 ];
+  ord[ 0 ] = L_SOIL; ord[ 1 ] = L_DRY; ord[ 2 ] = L_FOREST; ord[ 3 ] = L_GRASS;
+  ord[ 4 ] = L_GRAVEL; ord[ 5 ] = L_SAND; ord[ 6 ] = L_SNOW; ord[ 7 ] = L_PAVE;
+  float cov[ 8 ];
+  cov[ 0 ] = 1.0; cov[ 1 ] = wDry; cov[ 2 ] = wForest; cov[ 3 ] = wGrass;
+  cov[ 4 ] = wGravel; cov[ 5 ] = wSand; cov[ 6 ] = wSnow; cov[ 7 ] = wPave;
+  vec3 col = vec3( 0.0 );
+  for ( int k = 0; k < 8; k ++ ) {
+    float a = cov[ k ];
+    if ( a < 0.004 ) continue;
+    float L = ord[ k ];
+    int li = int( L + 0.5 );
+    vec2 uv = wxz / layerTile[ li ];
+    vec4 alb = layerAlbedo( L, uv, tNear * ( L == L_PAVE ? 0.0 : 1.0 ) );
+    if ( L == L_GRASS ) {
+      // the aerial grass scan also reads at hillside scale
+      vec4 broad = texture( tLayerAlbedo, vec3( uv * 0.239 + vec2( 0.37, 0.71 ), L ) );
+      alb = mix( alb, broad, smoothstep( 18.0, 180.0, tDist ) * 0.6 );
+    }
+    vec4 nh = tFine > 0.001 ? texture( tLayerNormal, vec3( uv, L ) ) : vec4( 0.5, 0.5, 0.5, 1.0 );
+    vec3 tintK = tTint;
+    if ( L == L_SOIL ) tintK = mix( tTint, vec3( 0.15, 0.105, 0.058 ), vTColor.a * 0.5 );
+    vec3 c = gradeLayer( alb.rgb, li, tintK );
+    float b = k == 0 ? 1.0 : heightBlend( a, nh.b );
+    col = mix( col, c, b );
+    tRough = mix( tRough, alb.a, b );
+    vec2 nxy = nh.rg * 2.0 - 1.0; // B holds height, so rebuild the normal's z
+    tNsum = mix( tNsum, vec3( nxy, sqrt( max( 0.0, 1.0 - dot( nxy, nxy ) ) ) ), b );
+    tNw = max( tNw, b );
+  }
+  // rock faces: triplanar (red sandstone in the canyon)
+  if ( wRock > 0.004 ) {
+    vec3 sg = sign( tN0 + vec3( 0.0001 ) );
+    vec3 tw = pow( abs( tN0 ), vec3( 4.0 ) );
+    tw /= max( dot( tw, vec3( 1.0 ) ), 0.0001 );
+    float L = mix( L_ROCK, L_REDROCK, step( 0.5, wCanyon ) );
+    int li = int( L + 0.5 );
+    float tile = layerTile[ li ];
+    vec2 ux = vec2( -vTPos.z * sg.x, vTPos.y ) / tile;
+    vec2 uy = vec2( vTPos.x * sg.y, -vTPos.z ) / tile;
+    vec2 uz = vec2( vTPos.x * sg.z, vTPos.y ) / tile;
+    vec4 ax = texture( tLayerAlbedo, vec3( ux, L ) ), ay = texture( tLayerAlbedo, vec3( uy, L ) ), az = texture( tLayerAlbedo, vec3( uz, L ) );
+    vec4 rk = ax * tw.x + ay * tw.y + az * tw.z;
+    // big cliffs: fold in a copy at a quarter of the frequency so the repeats break up
+    float far4 = smoothstep( 15.0, 90.0, tDist ) * 0.55;
+    if ( far4 > 0.01 ) {
+      vec4 bx = texture( tLayerAlbedo, vec3( ux * 0.25 + 0.31, L ) ), by = texture( tLayerAlbedo, vec3( uy * 0.25 + 0.57, L ) ), bz = texture( tLayerAlbedo, vec3( uz * 0.25 + 0.13, L ) );
+      rk = mix( rk, bx * tw.x + by * tw.y + bz * tw.z, far4 );
+    }
+    vec4 nx = texture( tLayerNormal, vec3( ux, L ) ), ny = texture( tLayerNormal, vec3( uy, L ) ), nz = texture( tLayerNormal, vec3( uz, L ) );
+    float hgt = nx.b * tw.x + ny.b * tw.y + nz.b * tw.z;
+    vec3 rockTint = mix( tTint, vec3( tValue * 1.02, tValue, tValue * 0.93 ), 0.6 * ( 1.0 - wCanyon ) );
+    vec3 c = gradeLayer( rk.rgb, li, rockTint );
+    float b = heightBlend( wRock, hgt );
+    col = mix( col, c, b );
+    tRough = mix( tRough, clamp( rk.a, 0.55, 0.96 ), b );
+    vec3 dX = vec3( 0.0, nx.y * 2.0 - 1.0, -( nx.x * 2.0 - 1.0 ) * sg.x );
+    vec3 dY = vec3( ( ny.x * 2.0 - 1.0 ) * sg.y, 0.0, -( ny.y * 2.0 - 1.0 ) );
+    vec3 dZ = vec3( ( nz.x * 2.0 - 1.0 ) * sg.z, nz.y * 2.0 - 1.0, 0.0 );
+    tRockN = normalize( tN0 + ( dX * tw.x + dY * tw.y + dZ * tw.z ) * 0.9 );
+    tRockW = b;
+  }
+  tAlbedo = mix( col, tTint, tFar );
+}
+tAlbedo *= mix( 1.0, 0.63, tWet );
+vec4 diffuseColor = vec4( tAlbedo, opacity );`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+roughnessFactor = mix( clamp( tRough, 0.55, 0.99 ), 0.93, tFar );
+roughnessFactor = mix( roughnessFactor, mix( 0.45, 0.4, mR.a ), tWet );`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+if ( tFine > 0.001 && tFar < 0.99 ) {
+  vec3 planar = groundNormal( normalize( tNsum ) * 0.5 + 0.5, tN0, 0.55 );
+  vec3 mapped = normalize( mix( tN0, planar, tNw ) );
+  mapped = normalize( mix( mapped, tRockN, tRockW ) );
+  mapped = normalize( mix( tN0, mapped, tFine ) );
+  normal = normalize( mat3( viewMatrix ) * mapped );
+}`);
+  };
+  mat.customProgramCacheKey = () => 'terrain-layered-v3';
+  return mat;
 }
 
 // All terrain chunks share one material and one set of texture uniforms. World
@@ -308,7 +568,8 @@ export class Terrain {
     this.n = this.res / CHUNK;
     this.group = new THREE.Group();
     this.group.name = 'terrain';
-    this.material = useFarShadow(createTerrainMaterial(detailTex, world, hf));
+    const arrays = getTerrainArrays();
+    this.material = useFarShadow(arrays && world.surface ? createLayeredTerrainMaterial(detailTex, world, hf, arrays) : createTerrainMaterial(detailTex, world, hf));
     this.depthMaterial = createTerrainDepthMaterial();
     this.normals = this.computeNormals();
     this.chunks = [];
@@ -323,6 +584,11 @@ export class Terrain {
         mesh.customDepthMaterial = this.depthMaterial;
         mesh.matrixAutoUpdate = false;
         const bb = lods[1].boundingBox;
+        // open sea deeper than ~8 m is hidden by the water (opaque at that depth)
+        if (bb.max.y < -8) {
+          lods.forEach((g) => g?.dispose());
+          continue;
+        }
         const chunk = { cx, cz, lods, mesh, level: STEPS.length - 1, minY: bb.min.y, maxY: bb.max.y, x0: cx * CHUNK * this.cell - this.half, z0: cz * CHUNK * this.cell - this.half, building: false };
         this.chunks.push(chunk);
         this.group.add(mesh);

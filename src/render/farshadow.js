@@ -200,14 +200,29 @@ function buildCasterTexture(world, casters) {
     if (!v) continue;
     for (let i = 0; i < v.length; i += 5) splat(v[i], v[i + 2], Math.max(cell * 0.6, rad * v[i + 3]), v[i + 1] + top * v[i + 3]);
   }
+  // oriented box (hx along (c, s)); long buildings must not become huge discs
+  const splatBox = (b) => {
+    const R = Math.hypot(b.hx, b.hz) + cell;
+    const ix0 = Math.max(0, Math.floor((b.x - R + hf.half) / cell)),
+      ix1 = Math.min(hf.res, Math.ceil((b.x + R + hf.half) / cell));
+    const iz0 = Math.max(0, Math.floor((b.z - R + hf.half) / cell)),
+      iz1 = Math.min(hf.res, Math.ceil((b.z + R + hf.half) / cell));
+    const ex = b.hx + cell * 0.5,
+      ez = b.hz + cell * 0.5;
+    for (let iz = iz0; iz <= iz1; iz++)
+      for (let ix = ix0; ix <= ix1; ix++) {
+        const dx = ix * cell - hf.half - b.x,
+          dz = iz * cell - hf.half - b.z;
+        if (Math.abs(dx * b.c + dz * b.s) > ex || Math.abs(-dx * b.s + dz * b.c) > ez) continue;
+        const k = iz * S + ix;
+        if (b.y1 > all[k]) all[k] = b.y1;
+      }
+  };
   // buildings and landmarks from the collision world
   for (const s of casters) {
     if (s.kind !== 'building') continue;
     if (s.type === 0) splat(s.x, s.z, Math.max(cell * 0.6, s.r), s.y1, false);
-    else {
-      const r = Math.max(cell * 0.6, Math.hypot(s.hx, s.hz) * 0.8);
-      splat(s.x, s.z, r, s.y1, false);
-    }
+    else splatBox(s);
   }
   const data = new Uint16Array(S * S * 2);
   const src = world.data.heights;

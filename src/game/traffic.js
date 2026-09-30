@@ -1,17 +1,16 @@
 // Ambient traffic: instanced cars following road lanes; near misses; crash → physics wreck.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { buildCar, mergeByMaterial } from '../vehicle/carmodel.js';
-import { CAR_BY_ID } from '../vehicle/carspecs.js';
+import { getTrafficModel } from '../vehicle/trafficmodels.js';
+import { TRAFFIC_SPECS, TRAFFIC_COLORS } from '../vehicle/trafficspecs.js';
 import { VehiclePhysics } from '../vehicle/vehiclephysics.js';
 import { resolveVehiclePair } from '../world/colliders.js';
 import { clamp } from '../core/math.js';
 
-const TRAFFIC_CARS = ['hatch', 'sedan', 'truck', 'rally'];
-const COLORS = ['#e8e8ea', '#1c1f24', '#8d9096', '#b3121a', '#2b3ac4', '#d9c9ae', '#3a5a40', '#6b6f76', '#f2f2f2', '#23395b', '#7a1f2b', '#c9a227'];
+const COLORS = TRAFFIC_COLORS;
 const PER_STYLE = 16;
-const NEAR_DIST = 110; // cars nearer than this cast shadows
-const MID_DIST = 320; // beyond this a low-poly stand-in is drawn
+const NEAR_DIST = 60; // full civilian model and shadows
+const MID_DIST = 320; // simplified mesh, then a coarse version of the same body shape
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -40,7 +39,7 @@ class KinBody {
 }
 
 export class TrafficSystem {
-  constructor(game, count = 28) {
+  constructor(game, count = 44) {
     this.game = game;
     this.world = game.world;
     this.count = count;
@@ -51,21 +50,18 @@ export class TrafficSystem {
     this.proxyDark = new THREE.MeshStandardMaterial({ color: 0x15171b, roughness: 0.5, metalness: 0.2 });
     this.frustum = new THREE.Frustum();
     this.sphere = new THREE.Sphere();
-    this.styles = TRAFFIC_CARS.map((id) => this.buildStyle(CAR_BY_ID[id]));
+    this.styles = TRAFFIC_SPECS.map(spec => this.buildStyle(spec));
     this.cars = [];
     this.roads = this.world.network.roads.filter((r) => r.kind === 'road' || r.kind === 'highway' || r.kind === 'street');
-    this.roadWeights = this.roads.map((r) => r.length);
+    this.roadWeights = this.roads.map((r) => r.length * (r.city ? 3 : 1));
     this.totalW = this.roadWeights.reduce((a, b) => a + b, 0);
     for (let i = 0; i < count; i++) this.cars.push(this.newCar(i % this.styles.length));
     game.scene.add(this.group);
     this.nearMissCooldown = 0;
   }
 
-  // Three instanced sets per car style: near (full model, casts shadows), mid (full model,
-  // no shadow) and far (a ~60-triangle proxy). Cars are frustum-culled per instance.
+  // Three instanced sets per civilian body style. No garage or race-car assets are used.
   buildStyle(spec) {
-    const car = buildCar(spec.style, { color: '#ffffff' });
-    const all = mergeByMaterial([car.group], car.group);
     const make = (geo, mat, isPaint, cast, tier) => {
       const im = new THREE.InstancedMesh(geo, mat, PER_STYLE);
       im.count = 0;
@@ -78,26 +74,18 @@ export class TrafficSystem {
       this.group.add(im);
       return im;
     };
-    const near = [],
-      mid = [];
-    for (const m of all) {
-      let mat = m.material;
-      const isPaint = mat === car.paintMat;
-      if (isPaint) {
-        mat = car.paintMat.clone();
-        mat.color.set(0xffffff);
-      }
-      near.push(make(m.geometry, mat, isPaint, true, 'near'));
-      mid.push(make(m.geometry, mat, isPaint, false, 'mid'));
-    }
-    const proxy = buildProxy(spec.style);
-    const far = [make(proxy.paint, this.proxyPaint, true, false, 'far'), make(proxy.dark, this.proxyDark, false, false, 'far')];
-    return { spec, tiers: [near, mid, far], used: [0, 0, 0], radius: spec.style.L / 2 + 0.6 };
+    const model = getTrafficModel(spec.style.trafficAsset);
+    // A missing pack still produces civilian-sized traffic, never a player race car.
+    const proxy = model ? null : buildProxy(spec.style);
+    const tiers = ['near', 'mid', 'far'].map((tier, level) => model
+      ? model[level].map(({ geometry, material, isPaint }) => make(geometry, material, isPaint, tier === 'near', tier))
+      : [make(proxy.paint, this.proxyPaint, true, tier === 'near', tier), make(proxy.dark, this.proxyDark, false, tier === 'near', tier)]);
+    return { spec, tiers, used: [0, 0, 0], radius: spec.style.L / 2 + 0.6 };
   }
 
   newCar(styleIdx) {
     const spec = this.styles[styleIdx].spec;
-    return { styleIdx, spec, alive: false, body: new KinBody(spec), color: COLORS[Math.floor(Math.random() * COLORS.length)], mode: 'kin', phys: null, speed: 0, target: 0, road: null, s: 0, dir: 1, lane: 0, timer: 0, passed: new Map() };
+    return { id: this.cars.length, styleIdx, spec, alive: false, body: new KinBody(spec), color: COLORS[Math.floor(Math.random() * COLORS.length)], mode: 'kin', phys: null, speed: 0, target: 0, road: null, s: 0, dir: 1, lane: 0, timer: 0, passed: new Map() };
   }
 
   pickRoad() {
@@ -116,14 +104,16 @@ export class TrafficSystem {
       const s = Math.random() * road.length;
       const pt = road.pointAt(s, {});
       const d = Math.hypot(pt.x - near.x, pt.z - near.z);
-      if (d < 170 || d > 680) continue;
+      if (d < (road.city ? 85 : 170) || d > 680) continue;
       car.road = road;
       car.s = s;
       car.dir = Math.random() < 0.5 ? 1 : -1;
       const lanes = road.kind === 'highway' ? [0.125, 0.375] : [0.25];
       car.lane = lanes[Math.floor(Math.random() * lanes.length)] * road.width;
-      car.target = (road.kind === 'highway' ? 26 + Math.random() * 8 : road.kind === 'street' ? 11 + Math.random() * 4 : 17 + Math.random() * 5) * (0.95 + Math.random() * 0.1);
+      car.target = (road.kind === 'highway' ? 26 + Math.random() * 8 : road.kind === 'street' ? 6 + Math.random() * 4 : 17 + Math.random() * 5) * (0.95 + Math.random() * 0.1);
       car.speed = car.target;
+      this.place(car, 0);
+      if (this.cars.some(o => o !== car && o.alive && o.body.pos.distanceTo(car.body.pos) < 12)) continue;
       car.alive = true;
       car.mode = 'kin';
       car.phys = null;
@@ -194,6 +184,17 @@ export class TrafficSystem {
         let ds = (o.s - car.s) * car.dir;
         if (car.road.closed) ds = ((ds % car.road.length) + car.road.length) % car.road.length;
         if (ds > 0 && ds < 28) limit = Math.min(limit, o.mode === 'dyn' ? 0 : o.speed * (ds < 12 ? 0.6 : 1));
+      }
+      // Yield to crossing traffic already entering the junction. Stable priority
+      // breaks ties so two cars do not both wait forever or drive through each other.
+      const forward=car.road.pointAt(car.s,{});
+      for(const o of this.cars){
+        if(o===car||!o.alive||o.road===car.road)continue;
+        const dx=o.body.pos.x-car.body.pos.x,dz=o.body.pos.z-car.body.pos.z;
+        if(dx*dx+dz*dz>24*24)continue;
+        const along=(dx*forward.tx+dz*forward.tz)*car.dir;
+        const lateral=Math.abs(dx*forward.tz-dz*forward.tx);
+        if(along>0&&along<15&&lateral<4.5&&(o.speed>1||o.id<car.id))limit=Math.min(limit,Math.max(0,(along-7)*.6));
       }
       // player ahead in our lane
       const hx = car.body.pos.x,
@@ -305,12 +306,12 @@ export class TrafficSystem {
 
 // ~60-triangle stand-in for a distant car: painted lower body + dark cabin and wheels.
 function buildProxy(st) {
-  const lowerH = Math.max(0.35, st.belt ? st.belt[0][1] * 0.9 : st.H * 0.55) - st.sill;
+  const lowerH = Math.max(0.35, st.H * 0.62) - st.sill;
   const body = new THREE.BoxGeometry(st.W * 0.96, lowerH, st.L * 0.97);
   body.translate(0, st.sill + lowerH / 2, 0);
   const cabinH = Math.max(0.2, st.H - st.sill - lowerH);
   const cabin = new THREE.BoxGeometry(st.W * 0.78, cabinH, st.L * 0.45);
-  cabin.translate(0, st.sill + lowerH + cabinH / 2, ((st.cabin?.b ?? 0) + (st.cabin?.c ?? 0)) / 2);
+  cabin.translate(0, st.sill + lowerH + cabinH / 2, -0.15);
   const wheels = [];
   for (const [x, z, r] of [
     [st.trackF / 2, st.WB / 2, st.wheelR],

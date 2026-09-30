@@ -121,6 +121,35 @@ export function makeWaterNormals(size = 256) {
   return finish(tex, { srgb: false });
 }
 
+// Gravel road mask (linear, u across the road, v along): R brightness (0.5 = neutral; the
+// two wheel tracks are compacted and darker, loose stones pile up between and beside
+// them), G grass (the edges and a thin centre strip).
+export function makeDirtRoadMask() {
+  const W = 128,
+    H = 512;
+  const n = new SimplexNoise(mulberry32(9127));
+  const data = new Uint8Array(W * H * 4);
+  for (let y = 0; y < H; y++)
+    for (let x = 0; x < W; x++) {
+      const u = x / W,
+        v = y / H;
+      const i = (y * W + x) * 4;
+      const wob = tileNoise(n, 0.5, v, 6, 3) * 0.035;
+      const ruts = Math.exp(-(((u - 0.3 - wob) / 0.06) ** 2)) + Math.exp(-(((u - 0.7 - wob) / 0.06) ** 2));
+      const ridge = Math.exp(-(((u - 0.5 - wob) / 0.08) ** 2)) + Math.exp(-(((Math.abs(u - 0.5) - 0.47) / 0.05) ** 2));
+      const big = tileNoise(n, u * 0.5, v, 5, 7);
+      const fine = hashf(x, y) - 0.5;
+      data[i] = clamp(128 * (1 - ruts * 0.2 + ridge * 0.1 + big * 0.12 + fine * 0.06), 0, 255);
+      const edge = Math.min(u, 1 - u);
+      const grass = clamp(1 - edge / (0.07 + 0.05 * (big + 0.5)), 0, 1) + clamp((0.05 - Math.abs(u - 0.5 - wob)) / 0.05, 0, 1) * clamp(0.3 + big, 0, 1);
+      data[i + 1] = clamp(grass * 255, 0, 255);
+      data[i + 2] = 0;
+      data[i + 3] = 255;
+    }
+  const tex = new THREE.DataTexture(data, W, H, THREE.RGBAFormat);
+  return finish(tex, { srgb: false });
+}
+
 // Road surface textures: u across the road (0..1), v along (repeats every `len` metres)
 export function makeRoadTexture(kind) {
   const W = 512,
@@ -133,6 +162,7 @@ export function makeRoadTexture(kind) {
   const d = img.data;
   const dirt = kind === 'dirt';
   const runway = kind === 'runway';
+  const track = kind === 'track';
   for (let y = 0; y < H; y++)
     for (let x = 0; x < W; x++) {
       const u = x / W,
@@ -158,9 +188,9 @@ export function makeRoadTexture(kind) {
         const med = tileNoise(n, u, v, 22);
         const fine = hashf(x, y) - 0.5;
         const agg = hashf(x * 3 + 1, y * 7 + 3) > 0.985 ? 0.12 : 0;
-        base = (runway ? 0.46 : 0.3) + big * 0.03 + med * 0.03 + fine * 0.08 + agg;
+        base = (runway ? 0.46 : track ? 0.25 : 0.3) + big * 0.03 + med * 0.03 + fine * (track ? 0.05 : 0.08) + agg * (track ? 0.4 : 1);
         // worn tyre tracks in each lane
-        if (!runway) {
+        if (!runway && !track) {
           const lanes = kind === 'highway' ? 4 : 2;
           for (let l = 0; l < lanes; l++) {
             const lc = (l + 0.5) / lanes;
@@ -181,7 +211,7 @@ export function makeRoadTexture(kind) {
     // cracks
     g.strokeStyle = 'rgba(10,10,10,0.35)';
     g.lineWidth = 1.2;
-    for (let k = 0; k < 14; k++) {
+    for (let k = 0; k < (track ? 0 : 14); k++) {
       let x = rnd() * W,
         y = rnd() * H;
       g.beginPath();
@@ -194,7 +224,7 @@ export function makeRoadTexture(kind) {
       g.stroke();
     }
     // tar patches
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < (track ? 0 : 5); k++) {
       g.fillStyle = `rgba(20,20,22,${0.15 + rnd() * 0.2})`;
       g.fillRect(rnd() * W, rnd() * H, 20 + rnd() * 90, 20 + rnd() * 140);
     }
@@ -221,6 +251,10 @@ export function makeRoadTexture(kind) {
       line(0.05, 0.02, white);
       line(0.95, 0.02, white);
       line(0.5, 0.014, yellow, [H * 0.3, H * 0.2]);
+    } else if (track) {
+      // track limits
+      line(0.028, 0.013, white);
+      line(0.972, 0.013, white);
     } else if (kind === 'runway') {
       line(0.02, 0.012, white);
       line(0.98, 0.012, white);

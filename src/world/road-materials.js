@@ -1,11 +1,17 @@
 import * as THREE from 'three';
-import { makeRoadTexture } from './textures.js';
+import { makeRoadTexture, makeDirtRoadMask } from './textures.js';
 import { getSurfaceAssets } from './surface-assets.js';
 
-// Lane markings follow road distance; the photographed aggregate keeps a fixed
-// metre scale instead of stretching across the width of each road type.
+// Lane markings follow road distance; the photographed aggregate keeps a fixed metre scale
+// instead of stretching across each road type. An aerial asphalt scan adds patches, repairs
+// and staining at a 30 m scale so long straights are not one uniform grey.
 export function makeRoadMaterial(kind) {
-  const surface = getSurfaceAssets()?.[kind === 'dirt' ? 'dirt' : 'asphalt'];
+  const assets = getSurfaceAssets();
+  if (kind === 'mud') return makeMudRoadMaterial(assets?.dirt);
+  if (kind === 'desert' && assets?.gravel) return makeGravelRoadMaterial(assets.gravel, true);
+  if (kind === 'dirt' && assets?.gravel) return makeGravelRoadMaterial(assets.gravel);
+  const surface = assets?.[kind === 'dirt' ? 'dirt' : 'asphalt'];
+  const macro = kind === 'dirt' ? null : assets?.asphaltMacro;
   const material = new THREE.MeshStandardMaterial({
     map: makeRoadTexture(kind),
     roughness: kind === 'dirt' ? 1 : 0.96,
@@ -18,31 +24,108 @@ export function makeRoadMaterial(kind) {
   if (surface) {
     material.onBeforeCompile = (shader) => {
       shader.uniforms.roadAggregate = { value: surface.map };
-      shader.vertexShader = shader.vertexShader.replace('#include <uv_vertex>', `
+      shader.uniforms.roadMacro = { value: macro?.map || surface.map };
+      shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vRoadWorld;').replace('#include <uv_vertex>', `
         #include <uv_vertex>
-        vNormalMapUv = (modelMatrix * vec4(position, 1.0)).xz / ${surface.tileSize.toFixed(2)};
+        vRoadWorld = (modelMatrix * vec4(position, 1.0)).xz;
+        vNormalMapUv = vRoadWorld / ${surface.tileSize.toFixed(2)};
         vRoughnessMapUv = vNormalMapUv;
       `);
-      shader.fragmentShader = 'uniform sampler2D roadAggregate;\n' + shader.fragmentShader;
+      shader.fragmentShader = 'uniform sampler2D roadAggregate;\nuniform sampler2D roadMacro;\nvarying vec2 vRoadWorld;\n' + shader.fragmentShader;
       shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `
         #include <map_fragment>
         vec3 aggregate = texture2D(roadAggregate, vNormalMapUv).rgb;
         float grain = dot(aggregate, vec3(0.2126, 0.7152, 0.0722));
         float painted = smoothstep(0.2, 0.55, max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)));
-        diffuseColor.rgb *= mix(clamp(grain * ${kind === 'dirt' ? '4.0' : '5.5'} + 0.55, 0.65, 1.45), 1.0, painted * 0.75);
+        float roadMacroK = 1.0;
+        ${macro ? `vec3 macro = texture2D(roadMacro, vRoadWorld / ${macro.tileSize.toFixed(1)}).rgb;
+        roadMacroK = clamp(mix(1.0, dot(macro, vec3(0.2126, 0.7152, 0.0722)) / 0.16, 0.5), 0.72, 1.3);` : ''}
+        diffuseColor.rgb *= mix(clamp(grain * ${kind === 'dirt' ? '4.0' : '5.5'} + 0.55, 0.65, 1.45) * roadMacroK, 1.0, painted * 0.75);
       `);
     };
-    material.customProgramCacheKey = () => `road-pbr-${kind}-1`;
+    material.customProgramCacheKey = () => `road-pbr-${kind}-2${macro ? 'm' : ''}`;
   }
   return material;
 }
 
+function makeMudRoadMaterial(soil) {
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xc1a981, map: soil?.map || makeRoadTexture('dirt'),
+    normalMap: soil?.normalMap || null, normalScale: new THREE.Vector2(.65, .65),
+    roughness: .38, metalness: 0,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vMudRoad;')
+      .replace('#include <uv_vertex>', `#include <uv_vertex>
+      vMudRoad = uv;
+      vMapUv = (modelMatrix * vec4(position, 1.0)).xz / 2.6;
+      #ifdef USE_NORMALMAP
+        vNormalMapUv = vMapUv;
+      #endif`);
+    shader.fragmentShader = 'varying vec2 vMudRoad;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+      float rut = exp(-pow((vMudRoad.x - .32) * 25.0, 2.0)) + exp(-pow((vMudRoad.x - .68) * 25.0, 2.0));
+      float pooled = smoothstep(.15, .65, sin(vMudRoad.y * 3.7 + sin(vMudRoad.x * 15.0)) * sin(vMudRoad.y * 7.3 + vMudRoad.x * 7.0));
+      pooled *= smoothstep(.06, .22, vMudRoad.x) * (1.0 - smoothstep(.78, .94, vMudRoad.x));
+      diffuseColor.rgb *= .9 - .17 * rut;
+      diffuseColor.rgb = mix(diffuseColor.rgb, vec3(.075, .055, .027), pooled * .8);`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+      roughnessFactor = mix(.73 - rut * .3, .1, pooled);`);
+  };
+  material.customProgramCacheKey = () => 'wet-mud-ruts-v1';
+  return material;
+}
+
+// Gravel roads: the photographed gravel as the surface, darker compacted wheel tracks with
+// loose stones between them, and grass along the edges and down the middle.
+function makeGravelRoadMaterial(gravel, desert = false) {
+  const mask = makeDirtRoadMask();
+  const material = new THREE.MeshStandardMaterial({
+    color: desert ? 0xdac196 : 0xffffff,
+    map: gravel.map,
+    normalMap: gravel.normalMap,
+    roughnessMap: gravel.roughnessMap,
+    normalScale: new THREE.Vector2(0.7, 0.7),
+    roughness: 1,
+    metalness: 0,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.uniforms.roadMask = { value: mask };
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', '#include <common>\nvarying vec2 vRoadUv;').replace('#include <uv_vertex>', `
+      #include <uv_vertex>
+      vRoadUv = uv * vec2(1.0, 0.25);
+      vMapUv = (modelMatrix * vec4(position, 1.0)).xz / ${(gravel.tileSize * 1.1).toFixed(2)};
+      vNormalMapUv = vMapUv;
+      vRoughnessMapUv = vMapUv;
+    `);
+    shader.fragmentShader = 'uniform sampler2D roadMask;\nvarying vec2 vRoadUv;\n' + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <map_fragment>', `
+        #include <map_fragment>
+        vec4 roadM = texture2D(roadMask, vRoadUv);
+        diffuseColor.rgb *= roadM.r * 2.0;
+        vec3 verge = vec3(0.07, 0.1, 0.035) * (0.7 + 3.0 * dot(diffuseColor.rgb, vec3(0.333)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, ${desert ? 'vec3(.32, .24, .14)' : 'verge'}, roadM.g * ${desert ? '.45' : '.85'});
+      `)
+      .replace('#include <roughnessmap_fragment>', `
+        #include <roughnessmap_fragment>
+        roughnessFactor = mix(roughnessFactor, 0.92, roadM.g);
+      `);
+  };
+  material.customProgramCacheKey = () => `road-gravel-3-${desert}`;
+  return material;
+}
+
+// Loose gravel shoulders beside paved roads (fades out into the verge by vertex alpha).
 export function makeShoulderMaterial() {
-  const dirt = getSurfaceAssets()?.dirt;
+  const assets = getSurfaceAssets();
+  const set = assets?.gravel || assets?.dirt;
   return new THREE.MeshStandardMaterial({
-    color: 0x9e9686, map: dirt?.map || null,
-    normalMap: dirt?.normalMap || null, normalScale: new THREE.Vector2(0.3, 0.3),
-    roughnessMap: dirt?.roughnessMap || null, roughness: 1,
+    color: assets?.gravel ? 0xc7bfb0 : 0x9e9686, map: set?.map || null,
+    normalMap: set?.normalMap || null, normalScale: new THREE.Vector2(0.4, 0.4),
+    roughnessMap: set?.roughnessMap || null, roughness: 1,
     vertexColors: true, transparent: true, depthWrite: false,
     polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
   });

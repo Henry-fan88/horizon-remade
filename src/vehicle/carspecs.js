@@ -1,203 +1,94 @@
-// Car database: body styles (for the procedural model) + physics specs.
-// Four cars use attributed real-car assets; the original fictional roster is retained.
+// Car database. Every car is a licensed, attributed real-car model (see
+// public/models/*/ATTRIBUTION.md); physics comes from the specs below.
 // 0-100 / 0-200 times are measured by driving the physics (see carperf.js).
 import { piClass } from '../config.js';
 import { IMPORTED_CARS } from './modelcatalog.js';
 
-// ------------------------------------------------------------------ body styles
-// All z values in metres, rear (-) to front (+), relative to the wheelbase centre.
+// ------------------------------------------------------------------ chassis + model fitting
+// Car space: +Z forward, +X left (left-hand drive), +Y up, ground at y = 0, z = 0 midway
+// between the axles. Dimensions drive the physics (collision box, suspension mounts), so
+// they match each prepared model rather than being tuned by eye.
+//   cockpit.eye      driver's eye point for the in-car camera
+//   cockpit.wheel    where the steering wheel sits: centre, column axis (pointing at the
+//                    driver) and rim radius; the model's wheel is cut out there so it can turn
+//   cockpit.ratio    steering ratio from the front wheels to the steering wheel
+//   views            hood / bumper camera points [y, z]
 export const STYLES = {
-  supercar: {
-    L: 4.7, W: 2.03, H: 1.14, WB: 2.7, fo: 1.1, ro: 0.9,
-    wheelR: 0.345, wheelRr: 0.36, wheelW: 0.26, wheelWr: 0.33, trackF: 1.72, trackR: 1.7, sill: 0.14,
-    top: [[-2.25, 0.84], [-2.05, 0.98], [-1.3, 1.02], [-0.5, 1.13], [0.08, 1.13], [0.95, 0.83], [1.6, 0.71], [2.05, 0.6], [2.45, 0.45]],
-    belt: [[-2.25, 0.8], [-1.6, 0.97], [-0.6, 0.9], [0.4, 0.84], [1.2, 0.76], [1.9, 0.66], [2.45, 0.44]],
-    width: [[-2.25, 0.93], [-1.35, 1.015], [-0.75, 0.99], [0.0, 0.96], [0.85, 0.99], [1.35, 1.0], [2.45, 0.92]],
-    roofW: [[-2.25, 0.5], [-1.25, 0.6], [-0.5, 0.57], [0.1, 0.58], [0.95, 0.74], [2.45, 0.74]],
-    cabin: { a: 0.97, b: 0.1, c: -0.5, d: -1.28 }, cPillar: 0.25,
-    noseP: 5, tailP: 7, noseMinW: 0.5, tailMinW: 0.7, noseLift: 0.08, tailLift: 0.1,
-    headlight: { type: 'slit', w: 0.44, h: 0.07, y: 0.62, inset: 0.3, back: 0.32, yaw: 0.55, pitch: -0.55, drl: true },
-    taillight: { type: 'strip', h: 0.05, y: 0.84 },
-    grilleW: 1.2, grilleH: 0.14, grilleY: 0.26, sideIntake: true, diffuser: true,
-    exhaust: { n: 2, spread: 0.12, r: 0.05, y: 0.42 },
-    rimStyle: 'split', spokes: 5, rimColor: '#1a1a1c', caliperColor: '#f0c000', plateY: 0.5,
-  },
+  // Ferrari 458: the GLB is already at real scale (2.65 m wheelbase, 1.67 m front track).
   gt: {
     visualAsset: 'ferrari-458',
-    L: 4.55, W: 1.92, H: 1.29, WB: 2.55, fo: 0.95, ro: 1.05,
-    wheelR: 0.34, wheelRr: 0.35, wheelW: 0.25, wheelWr: 0.3, trackF: 1.6, trackR: 1.6, sill: 0.15,
-    top: [[-2.325, 0.86], [-2.12, 0.98], [-1.7, 1.02], [-1.05, 1.16], [-0.35, 1.29], [0.12, 1.28], [0.78, 0.97], [1.5, 0.84], [1.95, 0.76], [2.225, 0.6]],
-    belt: [[-2.325, 0.84], [-1.6, 0.97], [-0.6, 0.92], [0.5, 0.9], [1.2, 0.84], [1.9, 0.74], [2.225, 0.6]],
-    width: [[-2.325, 0.86], [-1.55, 0.96], [-0.9, 0.95], [0, 0.92], [0.9, 0.93], [1.3, 0.95], [2.225, 0.86]],
-    roofW: [[-2.325, 0.45], [-1.3, 0.55], [-0.4, 0.62], [0.15, 0.62], [0.78, 0.72], [2.225, 0.72]],
-    cabin: { a: 0.8, b: 0.12, c: -0.4, d: -1.35 }, cPillar: 0.2,
-    noseP: 5, tailP: 5, noseMinW: 0.5, tailMinW: 0.6,
-    headlight: { type: 'slit', w: 0.36, h: 0.11, y: 0.68, inset: 0.28, back: 0.3, yaw: 0.5, pitch: -0.45, drl: true },
-    taillight: { type: 'pair', w: 0.36, h: 0.07, y: 0.88, inset: 0.3, yaw: -0.35 },
-    grilleW: 0.9, grilleH: 0.2, grilleY: 0.33, lipSpoiler: true,
-    exhaust: { n: 4, spread: 0.6, r: 0.042, y: 0.26 }, diffuser: true,
-    rimStyle: 'fivespoke', spokes: 5, rimColor: '#c9c9c9', caliperColor: '#c0101a',
+    L: 4.533, W: 1.937, H: 1.21, WB: 2.65, fo: 1.112, ro: 0.771,
+    wheelR: 0.352, wheelRr: 0.358, wheelW: 0.247, wheelWr: 0.272, trackF: 1.671, trackR: 1.646, sill: 0.15,
+    headlight: { y: 0.68 },
+    rimColor: '#c9c9c9', caliperColor: '#c0101a',
+    cockpit: { eye: [0.36, 1.0, 0.02], fov: 72, ratio: 11.5 },
+    views: { hood: [0.93, 1.35], bumper: [0.45, 2.45] },
   },
-  jdm: {
-    L: 4.6, W: 1.8, H: 1.36, WB: 2.66, fo: 0.9, ro: 1.04,
-    wheelR: 0.33, wheelW: 0.25, trackF: 1.51, trackR: 1.5, sill: 0.16,
-    top: [[-2.37, 0.96], [-2.25, 1.04], [-1.35, 1.07], [-1.05, 1.18], [-0.5, 1.36], [0.28, 1.36], [0.92, 1.0], [1.6, 0.92], [2.1, 0.86], [2.23, 0.72]],
-    belt: [[-2.37, 0.97], [-1.25, 0.99], [0.5, 0.95], [1.4, 0.9], [2.0, 0.86], [2.23, 0.72]],
-    width: [[-2.37, 0.86], [-1.3, 0.9], [0, 0.885], [1.3, 0.9], [2.23, 0.86]],
-    roofW: [[-2.37, 0.6], [-1.2, 0.62], [-0.5, 0.64], [0.28, 0.64], [0.92, 0.74], [2.23, 0.74]],
-    cabin: { a: 0.94, b: 0.28, c: -0.5, d: -1.18 }, cPillar: 0.3,
-    noseP: 8, tailP: 10, noseMinW: 0.75, tailMinW: 0.85, noseLift: 0.06, tailLift: 0.08,
-    headlight: { type: 'slit', w: 0.36, h: 0.12, y: 0.78, inset: 0.26, back: 0.08, yaw: 0.25, pitch: -0.2 },
-    taillight: { type: 'round', h: 0.12, y: 0.86, inset: 0.26 },
-    grilleW: 0.8, grilleH: 0.14, grilleY: 0.52,
-    wing: { z: -2.12, y: 1.24, chord: 0.3, spanK: 0.94 }, trimGloss: true,
-    exhaust: { n: 1, r: 0.06, y: 0.28 },
-    rimStyle: 'mesh', spokes: 12, rimColor: '#d9d9d9', caliperColor: '#c0101a',
-  },
-  muscle: {
-    L: 5.0, W: 1.93, H: 1.36, WB: 2.95, fo: 0.98, ro: 1.07,
-    wheelR: 0.36, wheelW: 0.26, wheelWr: 0.3, trackF: 1.62, trackR: 1.62, sill: 0.17,
-    top: [[-2.545, 0.98], [-2.35, 1.04], [-1.5, 1.07], [-1.05, 1.22], [-0.5, 1.36], [0.35, 1.36], [0.95, 1.02], [1.8, 0.98], [2.3, 0.94], [2.455, 0.76]],
-    belt: [[-2.545, 1.0], [-1.4, 1.02], [0.5, 1.0], [1.8, 0.97], [2.455, 0.8]],
-    width: [[-2.545, 0.9], [-1.5, 0.965], [0, 0.95], [1.4, 0.955], [2.455, 0.9]],
-    roofW: [[-2.545, 0.6], [-1.2, 0.62], [-0.5, 0.66], [0.35, 0.66], [0.95, 0.76], [2.455, 0.76]],
-    cabin: { a: 0.97, b: 0.35, c: -0.5, d: -1.12 }, cPillar: 0.35,
-    noseP: 9, tailP: 10, noseMinW: 0.8, tailMinW: 0.86, noseLift: 0.05, tailLift: 0.08, fenderRise: 0.04,
-    headlight: { type: 'round', w: 0.19, h: 0.19, y: 0.8, inset: 0.2, back: 0.02, yaw: 0, pitch: 0, forward: 0.0 },
-    taillight: { type: 'strip', h: 0.1, y: 0.9 },
-    grilleW: 1.3, grilleH: 0.26, grilleY: 0.7, hoodScoop: true, lipSpoiler: true,
-    exhaust: { n: 2, spread: 0.62, r: 0.055, y: 0.3 },
-    rimStyle: 'fivespoke', spokes: 5, rimColor: '#2a2a2c', caliperColor: '#e05a10',
-  },
-  rally: {
-    L: 4.25, W: 1.86, H: 1.46, WB: 2.62, fo: 0.88, ro: 0.75,
-    wheelR: 0.33, wheelW: 0.24, trackF: 1.6, trackR: 1.6, sill: 0.24,
-    top: [[-2.06, 1.02], [-1.95, 1.3], [-1.5, 1.44], [-0.6, 1.46], [0.25, 1.46], [0.95, 1.06], [1.6, 0.96], [2.05, 0.84], [2.19, 0.7]],
-    belt: [[-2.06, 1.0], [-1.6, 1.04], [0.0, 1.0], [1.3, 0.95], [2.19, 0.72]],
-    width: [[-2.06, 0.88], [-1.3, 0.93], [0, 0.9], [1.3, 0.93], [2.19, 0.86]],
-    roofW: [[-2.06, 0.62], [-1.5, 0.64], [0.25, 0.66], [0.95, 0.76], [2.19, 0.76]],
-    cabin: { a: 0.97, b: 0.25, c: -1.5, d: -1.96 }, cPillar: 0.15, bPillar: -0.45,
-    noseP: 6, tailP: 12, noseMinW: 0.62, tailMinW: 0.9, noseLift: 0.06, tailLift: 0.05,
-    headlight: { type: 'slit', w: 0.34, h: 0.13, y: 0.8, inset: 0.26, back: 0.18, yaw: 0.4, pitch: -0.3 },
-    taillight: { type: 'pair', w: 0.14, h: 0.3, y: 1.0, inset: 0.12, yaw: 0 },
-    grilleW: 0.9, grilleH: 0.2, grilleY: 0.52, roofScoop: true,
-    wing: { z: -1.95, y: 1.52, chord: 0.36, spanK: 0.92, angle: 0.1 },
-    exhaust: { n: 1, r: 0.06, y: 0.36 },
-    rimStyle: 'offroad', spokes: 6, rimColor: '#f2f2f2', caliperColor: '#1a50ff', plateY: 0.62,
-  },
-  hatch: {
-    L: 4.26, W: 1.8, H: 1.45, WB: 2.63, fo: 0.9, ro: 0.73,
-    wheelR: 0.32, wheelW: 0.23, trackF: 1.55, trackR: 1.53, sill: 0.18,
-    top: [[-2.045, 1.0], [-1.95, 1.28], [-1.45, 1.43], [-0.6, 1.45], [0.25, 1.45], [0.98, 1.02], [1.7, 0.92], [2.1, 0.82], [2.215, 0.66]],
-    belt: [[-2.045, 0.98], [-1.5, 1.0], [0.0, 0.96], [1.3, 0.9], [2.215, 0.68]],
-    width: [[-2.045, 0.86], [-1.3, 0.9], [0, 0.89], [1.3, 0.9], [2.215, 0.84]],
-    roofW: [[-2.045, 0.6], [-1.5, 0.64], [0.25, 0.66], [0.98, 0.74], [2.215, 0.74]],
-    cabin: { a: 1.0, b: 0.25, c: -1.45, d: -1.95 }, cPillar: 0.2, bPillar: -0.4,
-    noseP: 6, tailP: 12, noseMinW: 0.6, tailMinW: 0.9,
-    headlight: { type: 'slit', w: 0.38, h: 0.11, y: 0.76, inset: 0.24, back: 0.16, yaw: 0.35, pitch: -0.3, drl: true },
-    taillight: { type: 'pair', w: 0.3, h: 0.12, y: 0.98, inset: 0.18, yaw: -0.2 },
-    grilleW: 0.95, grilleH: 0.12, grilleY: 0.62, lipSpoiler: true,
-    exhaust: { n: 2, spread: 0.4, r: 0.045, y: 0.28 },
-    rimStyle: 'fivespoke', spokes: 10, rimColor: '#3a3a3e', caliperColor: '#c0101a',
-  },
-  truck: {
-    L: 5.6, W: 2.2, H: 1.98, WB: 3.7, fo: 1.0, ro: 0.9,
-    wheelR: 0.45, wheelW: 0.32, trackF: 1.9, trackR: 1.9, sill: 0.5, archGap: 0.08,
-    top: [[-2.75, 1.4], [-1.2, 1.42], [-1.05, 1.5], [-0.85, 1.98], [0.3, 1.98], [0.95, 1.55], [2.2, 1.48], [2.75, 1.28]],
-    belt: [[-2.75, 1.38], [-1.1, 1.42], [0.5, 1.46], [2.2, 1.44], [2.75, 1.26]],
-    width: [[-2.75, 1.03], [-1.8, 1.1], [0, 1.08], [1.8, 1.1], [2.75, 1.02]],
-    roofW: [[-2.75, 0.9], [-0.85, 0.82], [0.3, 0.84], [0.95, 0.9], [2.75, 0.9]],
-    cabin: { a: 1.0, b: 0.3, c: -0.85, d: -1.02 }, cPillar: 0.1, bPillar: -0.25, rearGlass: true,
-    noseP: 10, tailP: 14, noseMinW: 0.86, tailMinW: 0.92, noseLift: 0.08, tailLift: 0.06,
-    headlight: { type: 'slit', w: 0.4, h: 0.16, y: 1.24, inset: 0.3, back: 0.05, yaw: 0.15, pitch: 0, drl: true },
-    taillight: { type: 'pair', w: 0.12, h: 0.42, y: 1.1, inset: 0.08, yaw: 0 },
-    grilleW: 1.5, grilleH: 0.42, grilleY: 1.0, lightBar: true, bedCover: true,
-    exhaust: { n: 1, r: 0.065, y: 0.55 },
-    rimStyle: 'offroad', spokes: 6, rimColor: '#1c1c1c', caliperColor: '#1c1c1c', plateY: 0.85,
-  },
-  hyper: {
-    L: 4.85, W: 2.06, H: 1.08, WB: 2.75, fo: 1.12, ro: 0.98,
-    wheelR: 0.345, wheelRr: 0.365, wheelW: 0.27, wheelWr: 0.34, trackF: 1.72, trackR: 1.7, sill: 0.1,
-    top: [[-2.355, 0.76], [-2.15, 0.94], [-1.35, 1.0], [-0.55, 1.08], [0.05, 1.08], [0.95, 0.78], [1.65, 0.66], [2.1, 0.55], [2.495, 0.38]],
-    belt: [[-2.355, 0.74], [-1.6, 0.96], [-0.6, 0.88], [0.4, 0.8], [1.2, 0.72], [1.9, 0.6], [2.495, 0.38]],
-    width: [[-2.355, 0.95], [-1.4, 1.03], [-0.75, 0.98], [0.0, 0.93], [0.85, 0.98], [1.35, 1.02], [2.495, 0.9]],
-    roofW: [[-2.355, 0.45], [-1.3, 0.55], [-0.55, 0.52], [0.05, 0.55], [0.95, 0.72], [2.495, 0.72]],
-    cabin: { a: 0.97, b: 0.06, c: -0.55, d: -1.25 }, cPillar: 0.3, roofColor: 'trim',
-    noseP: 4, tailP: 6, noseMinW: 0.45, tailMinW: 0.75, noseLift: 0.06, tailLift: 0.12,
-    headlight: { type: 'slit', w: 0.36, h: 0.06, y: 0.52, inset: 0.32, back: 0.36, yaw: 0.6, pitch: -0.7, drl: true },
-    taillight: { type: 'strip', h: 0.035, y: 0.86 },
-    grilleW: 1.3, grilleH: 0.12, grilleY: 0.2, sideIntake: true, diffuser: true,
-    wing: { z: -2.0, y: 1.17, chord: 0.36, spanK: 0.86, angle: 0.08 }, wingPaint: false,
-    exhaust: { n: 1, r: 0.07, y: 0.62 },
-    rimStyle: 'turbine', spokes: 10, rimColor: '#2b2b30', caliperColor: '#1f7aff',
-  },
-  classic: {
-    L: 4.35, W: 1.72, H: 1.24, WB: 2.4, fo: 0.95, ro: 1.0,
-    wheelR: 0.32, wheelW: 0.2, trackF: 1.42, trackR: 1.42, sill: 0.18,
-    top: [[-2.2, 0.8], [-1.95, 0.9], [-1.3, 0.94], [-0.8, 1.1], [-0.4, 1.24], [0.1, 1.24], [0.55, 0.92], [1.3, 0.84], [1.9, 0.76], [2.15, 0.58]],
-    belt: [[-2.2, 0.8], [-1.3, 0.9], [-0.3, 0.88], [0.6, 0.86], [1.4, 0.82], [2.15, 0.6]],
-    width: [[-2.2, 0.78], [-1.3, 0.86], [-0.6, 0.83], [0.2, 0.82], [1.2, 0.86], [2.15, 0.74]],
-    roofW: [[-2.2, 0.5], [-0.8, 0.54], [0.1, 0.58], [0.55, 0.66], [2.15, 0.66]],
-    cabin: { a: 0.58, b: 0.12, c: -0.4, d: -0.95 }, cPillar: 0.1, pillarColor: 'paint',
-    noseP: 3, tailP: 3, noseMinW: 0.3, tailMinW: 0.35, noseLift: 0.1, tailLift: 0.12,
-    headlight: { type: 'round', w: 0.17, h: 0.17, y: 0.66, inset: 0.24, back: 0.3, yaw: 0.3, pitch: -0.2 },
-    taillight: { type: 'round', h: 0.09, y: 0.76, inset: 0.2 },
-    grilleW: 0.55, grilleH: 0.2, grilleY: 0.42,
-    exhaust: { n: 2, spread: 0.15, r: 0.035, y: 0.25 },
-    rimStyle: 'mesh', spokes: 16, rimColor: '#e0e0e0', caliperColor: '#333333',
-  },
-  sedan: {
-    L: 4.95, W: 1.96, H: 1.44, WB: 2.96, fo: 0.95, ro: 1.04,
-    wheelR: 0.35, wheelW: 0.25, trackF: 1.66, trackR: 1.66, sill: 0.15,
-    top: [[-2.52, 0.98], [-2.35, 1.04], [-1.7, 1.08], [-1.05, 1.36], [-0.5, 1.44], [0.35, 1.44], [1.0, 1.02], [1.8, 0.88], [2.3, 0.78], [2.43, 0.62]],
-    belt: [[-2.52, 0.98], [-1.6, 1.02], [0.3, 0.98], [1.4, 0.9], [2.43, 0.64]],
-    width: [[-2.52, 0.9], [-1.5, 0.975], [0, 0.97], [1.4, 0.975], [2.43, 0.9]],
-    roofW: [[-2.52, 0.55], [-1.2, 0.6], [-0.5, 0.68], [0.35, 0.68], [1.0, 0.78], [2.43, 0.78]],
-    cabin: { a: 1.02, b: 0.35, c: -0.5, d: -1.62 }, cPillar: 0.25, roofColor: 'glass',
-    noseP: 5, tailP: 6, noseMinW: 0.55, tailMinW: 0.65,
-    headlight: { type: 'slit', w: 0.5, h: 0.06, y: 0.76, inset: 0.2, back: 0.22, yaw: 0.45, pitch: -0.4, drl: true },
-    taillight: { type: 'strip', h: 0.05, y: 1.0 },
-    grilleW: 1.2, grilleH: 0.1, grilleY: 0.34, plates: true,
-    exhaust: { n: 0 },
-    rimStyle: 'turbine', spokes: 7, rimColor: '#8d8d93', caliperColor: '#cc1111',
-  },
+  shelby: fromAsset('shelby-gt500', {
+    sill: 0.171, headlight: { y: 0.805 },
+    rimColor: '#2a2a2c', caliperColor: '#e05a10',
+    cockpit: { eye: [0.37, 1.1, -0.26], fov: 70, ratio: 15.5 },
+    views: { hood: [1.1, 1.3], bumper: [0.5, 2.31] },
+  }),
+  gt3: fromAsset('porsche-911-gt3', {
+    sill: 0.151, headlight: { y: 0.683 },
+    rimColor: '#c9c9c9', caliperColor: '#c0101a',
+    cockpit: { eye: [0.36, 1.05, -0.38], fov: 72, ratio: 13.8 },
+    views: { hood: [0.95, 1.3], bumper: [0.45, 2.27] },
+  }),
+  // Ground-effect era cars: central cockpit, halo, TV airbox camera and nose camera.
+  f1: modernFormulaStyle('mclaren-mcl60', [0, .89, .28], [1.26, -.1], [0, .637, .717]),
+  sf23: modernFormulaStyle('ferrari-sf23', [0, .88, .24], [1.23, -.17], [0, .62, .68]),
+  rb19: modernFormulaStyle('redbull-rb19', [0, .91, .34], [1.31, -.04], [0, .653, .813]),
+  fastback: fromAsset('mustang-fastback', {
+    sill: 0.169, headlight: { y: 0.796 },
+    rimColor: '#2a2a2c', caliperColor: '#e05a10',
+    cockpit: { eye: [0.36, 1.12, -0.38], fov: 70, ratio: 17 },
+    views: { hood: [1.04, 1.3], bumper: [0.5, 2.3] },
+  }),
 };
 
-// Match each new chassis to its prepared visual. The loft remains a fallback;
-// the existing styles and their handling are unchanged.
-function importedStyle(base, id) {
-  const geometry = IMPORTED_CARS[id].geometry;
-  const z = geometry.L / base.L, y = geometry.H / base.H, x = geometry.W / base.W;
-  const style = { ...base, ...geometry, visualAsset: id, sill: base.sill * y };
-  for (const key of ['top', 'belt']) style[key] = base[key].map(([a,b]) => [a*z,b*y]);
-  for (const key of ['width', 'roofW']) style[key] = base[key].map(([a,b]) => [a*z,b*x]);
-  style.cabin = Object.fromEntries(Object.entries(base.cabin).map(([key,v]) => [key,v*z]));
-  style.headlight = { ...base.headlight, y: base.headlight.y*y };
-  return style;
+// Prepared Sketchfab models carry their measured dimensions (tools/car-assets/prepare.py).
+function fromAsset(id, extra) {
+  return { ...IMPORTED_CARS[id].geometry, visualAsset: id, ...extra };
 }
-STYLES.shelby = importedStyle(STYLES.muscle, 'shelby-gt500');
-STYLES.gt3 = importedStyle(STYLES.gt, 'porsche-911-gt3');
-STYLES.fastback = importedStyle(STYLES.muscle, 'mustang-fastback');
+
+function modernFormulaStyle(id, eye, tv, wheel) {
+  const geometry = IMPORTED_CARS[id].geometry;
+  return fromAsset(id, {
+    sill: .06, headlight: { y: .36 }, openWheel: true, livery: true,
+    rimColor: '#2a2a2c', caliperColor: '#2a2a2c',
+    cockpit: { eye, fov: 76, ratio: 8, formulaWheel: wheel },
+    views: { hood: tv, bumper: [.28, geometry.WB / 2 + geometry.fo + .04] },
+  });
+}
 
 // ------------------------------------------------------------------ cars
-// powerKW, torque (Nm), mass (kg), topKmh target, grip (tyre mu), downforce ClA
+// powerKW, torque shape (tqPeak / tqFall), mass (kg), topKmh target, grip (tyre mu),
+// downforce ClA. Power and mass are representative road-car figures; suspension, grip,
+// gearing and prices are game tuning.
+const FORMULA_TUNE = {
+  price: 2500000, mass: 798, powerKW: 735, redline: 13000, idle: 3500,
+  tqPeak: .68, tqFall: .12, turbo: true, drive: 'RWD', topKmh: 340,
+  grip: 1.42, ClA: 3.2, cgH: .29, wf: .45, gears: 8, firstGear: 2.2,
+  susp: 3.6, travel: .08, offroad: .02, sound: 'v6f1', formula: true,
+  steerScale: .85, launchRpm: 9500,
+};
 const RAW = [
-  // Representative road-car power and mass; suspension/grip/gearing are game tuning.
-  { id: 'shelby', make: 'Ford', model: 'Mustang Shelby GT500', year: 2020, style: 'shelby', color: '#175ca6', price: 125000, mass: 1916, powerKW: 567, redline: 7500, tqPeak: .66, tqFall: .18, turbo: false, drive: 'RWD', topKmh: 290, grip: 1.1, ClA: .65, cgH: .51, wf: .56, gears: 7, susp: 2.05, travel: .2, offroad: .25, sound: 'v8' },
-  { id: 'gt3', make: 'Porsche', model: '911 GT3', year: 2022, style: 'gt3', color: '#5f969e', price: 210000, mass: 1435, powerKW: 375, redline: 9000, tqPeak: .68, tqFall: .13, turbo: false, drive: 'RWD', topKmh: 318, grip: 1.16, ClA: 1.1, cgH: .43, wf: .39, gears: 7, susp: 2.35, travel: .17, offroad: .2, sound: 'flat6' },
-  { id: 'fastback', make: 'Ford', model: 'Mustang Fastback', year: 1967, style: 'fastback', color: '#20252b', price: 68000, mass: 1360, powerKW: 168, redline: 6000, tqPeak: .54, tqFall: .34, turbo: false, drive: 'RWD', topKmh: 205, grip: .93, ClA: .05, cgH: .54, wf: .55, gears: 4, susp: 1.55, travel: .25, offroad: .35, sound: 'v8' },
-  { id: 'rally', make: 'Nordhaven', model: 'Rally RS', year: 2019, style: 'rally', color: '#1f5fff', price: 38000, mass: 1330, powerKW: 221, redline: 7400, turbo: true, drive: 'AWD', split: 0.45, topKmh: 225, grip: 1.02, ClA: 0.35, cgH: 0.5, wf: 0.58, gears: 6, susp: 1.5, travel: 0.26, offroad: 0.85, sound: 'boxer' },
-  { id: 'hatch', make: 'Maxwell', model: 'Volt GTI', year: 2021, style: 'hatch', color: '#e8e8ea', price: 28000, mass: 1350, powerKW: 180, redline: 6800, turbo: true, drive: 'FWD', topKmh: 245, grip: 0.98, ClA: 0.15, cgH: 0.52, wf: 0.62, gears: 6, susp: 1.9, travel: 0.2, offroad: 0.45, sound: 'i4' },
-  { id: 'jdm', make: 'Arashi', model: 'GT-R34 Kaze', year: 2002, style: 'jdm', color: '#2b3ac4', price: 72000, mass: 1560, powerKW: 250, redline: 8000, turbo: true, drive: 'AWD', split: 0.35, topKmh: 262, grip: 1.03, ClA: 0.4, cgH: 0.49, wf: 0.56, gears: 6, susp: 2.0, travel: 0.2, offroad: 0.35, sound: 'i6' },
+  { id: 'fastback', make: 'Ford', model: 'Mustang Fastback', year: 1967, style: 'fastback', color: '#20252b', price: 68000, mass: 1360, powerKW: 168, redline: 6000, tqPeak: 0.54, tqFall: 0.34, turbo: false, drive: 'RWD', topKmh: 205, grip: 0.93, ClA: 0.05, cgH: 0.54, wf: 0.55, gears: 4, susp: 1.55, travel: 0.25, offroad: 0.35, sound: 'v8classic' },
   // Ferrari 458 Italia: 4.5 L naturally aspirated flat-plane V8, 570 CV (419 kW) at 9,000 rpm,
   // 1,380 kg dry, 42/58 weight distribution, 7-speed dual clutch, top speed 325 km/h.
   { id: 'gt', make: 'Ferrari', model: '458 Italia', year: 2009, style: 'gt', color: '#c81d25', price: 145000, mass: 1380, powerKW: 419, redline: 9000, tqPeak: 0.67, tqFall: 0.14, turbo: false, drive: 'RWD', topKmh: 325, grip: 1.08, ClA: 0.6, cgH: 0.44, wf: 0.42, gears: 7, susp: 2.2, travel: 0.18, offroad: 0.25, sound: 'v8flat' },
-  { id: 'muscle', make: 'Brute', model: 'Hellstorm 392', year: 2022, style: 'muscle', color: '#b3121a', price: 82000, mass: 1920, powerKW: 527, redline: 6400, turbo: false, drive: 'RWD', topKmh: 318, grip: 1.0, ClA: 0.25, cgH: 0.52, wf: 0.54, gears: 6, susp: 1.9, travel: 0.2, offroad: 0.3, sound: 'v8' },
-  { id: 'supercar', make: 'Veloce', model: 'Tempesta V12', year: 2024, style: 'supercar', color: '#ffb300', price: 420000, mass: 1575, powerKW: 566, redline: 8700, turbo: false, drive: 'AWD', split: 0.3, topKmh: 350, grip: 1.14, ClA: 1.1, cgH: 0.43, wf: 0.43, gears: 7, susp: 2.4, travel: 0.16, offroad: 0.2, sound: 'v12' },
-  { id: 'hyper', make: 'Aurora', model: 'Zenith X', year: 2025, style: 'hyper', color: '#e21d6e', price: 2400000, mass: 1420, powerKW: 895, redline: 9000, turbo: true, drive: 'AWD', split: 0.3, topKmh: 402, grip: 1.2, ClA: 1.8, cgH: 0.41, wf: 0.42, gears: 7, susp: 2.6, travel: 0.14, offroad: 0.15, sound: 'v8t' },
-  { id: 'truck', make: 'Titan', model: 'Raptor TRX', year: 2023, style: 'truck', color: '#e46b14', price: 95000, mass: 2600, powerKW: 523, redline: 6300, turbo: true, drive: 'AWD', split: 0.45, topKmh: 190, grip: 0.9, ClA: 0.0, cgH: 0.85, wf: 0.56, gears: 8, susp: 1.3, travel: 0.4, offroad: 1.0, sound: 'v8' },
-  { id: 'classic', make: 'Siena', model: '250 Corsa', year: 1962, style: 'classic', color: '#a3141c', price: 180000, mass: 1050, powerKW: 175, redline: 7500, turbo: false, drive: 'RWD', topKmh: 250, grip: 0.9, ClA: 0.0, cgH: 0.46, wf: 0.5, gears: 5, susp: 1.6, travel: 0.2, offroad: 0.3, sound: 'v12' },
-  { id: 'sedan', make: 'Volta', model: 'S Plaid', year: 2024, style: 'sedan', color: '#101418', price: 110000, mass: 2160, powerKW: 750, redline: 16000, turbo: false, electric: true, drive: 'AWD', split: 0.4, topKmh: 282, grip: 1.05, ClA: 0.2, cgH: 0.45, wf: 0.48, gears: 1, susp: 2.0, travel: 0.18, offroad: 0.3, sound: 'ev' },
+  // Shelby GT500: 5.2 L supercharged cross-plane V8, 760 hp (567 kW), 7-speed dual clutch.
+  { id: 'shelby', make: 'Ford', model: 'Mustang Shelby GT500', year: 2020, style: 'shelby', color: '#175ca6', price: 125000, mass: 1916, powerKW: 567, redline: 7500, tqPeak: 0.66, tqFall: 0.18, turbo: false, supercharged: true, drive: 'RWD', topKmh: 290, grip: 1.1, ClA: 0.65, cgH: 0.51, wf: 0.56, gears: 7, susp: 2.05, travel: 0.2, offroad: 0.25, sound: 'v8sc' },
+  // 2023 V6 turbo cars. Eight gears and 798 kg follow contemporary specifications;
+  // combined power, aero and tyre values are a balanced game tune, not telemetry.
+  // Keep 'f1' as the McLaren ID so existing ownership, selection and records survive.
+  { id: 'f1', make: 'McLaren', model: 'MCL60', year: 2023, style: 'f1', color: '#ff8000', ...FORMULA_TUNE },
+  { id: 'sf23', make: 'Ferrari', model: 'SF23', year: 2023, style: 'sf23', color: '#e02129', ...FORMULA_TUNE },
+  { id: 'rb19', make: 'Red Bull', model: 'RB19', year: 2023, style: 'rb19', color: '#13233e', ...FORMULA_TUNE },
+  // 911 GT3 (992): 4.0 L naturally aspirated flat-six, 510 PS (375 kW), 9,000 rpm, PDK.
+  { id: 'gt3', make: 'Porsche', model: '911 GT3', year: 2022, style: 'gt3', color: '#5f969e', price: 210000, mass: 1435, powerKW: 375, redline: 9000, tqPeak: 0.68, tqFall: 0.13, turbo: false, drive: 'RWD', topKmh: 318, grip: 1.16, ClA: 1.1, cgH: 0.43, wf: 0.39, gears: 7, susp: 2.35, travel: 0.17, offroad: 0.2, sound: 'flat6' },
 ];
 
 // ------------------------------------------------------------------ derived specs
@@ -209,10 +100,10 @@ export function torqueCurve(x, peak = 0.62, fall = 0.36) {
   return 1 - fall * Math.pow((x - peak) / (1 - peak), 1.7);
 }
 
-function derive(raw) {
-  const style = STYLES[raw.style];
+// Ambient civilian cars share the spec calculation, but never enter the playable roster.
+export function deriveCarSpec(raw, style = STYLES[raw.style]) {
   const car = { ...raw, styleName: raw.style, style };
-  const idle = raw.electric ? 0 : 900;
+  const idle = raw.electric ? 0 : raw.idle ?? 900;
   car.idle = idle;
   // peak torque such that max(T * omega) == rated power
   let best = 0;
@@ -226,7 +117,7 @@ function derive(raw) {
   const r = style.wheelRr ?? style.wheelR;
   // gearbox: geometric ratios, final drive to hit top speed at ~97% redline in top gear
   const n = raw.gears;
-  const first = raw.electric ? 1 : raw.style === 'truck' ? 4.2 : 3.4;
+  const first = raw.electric ? 1 : raw.firstGear ?? 3.4;
   const last = raw.electric ? 1 : 0.72;
   const ratios = [];
   for (let i = 0; i < n; i++) ratios.push(n === 1 ? 1 : first * Math.pow(last / first, i / (n - 1)));
@@ -264,7 +155,7 @@ export function rateAcceleration(car) {
   car.stats.launch = Math.min(10, accel * 0.7 + (car.drive === 'AWD' ? 3 : 1));
 }
 
-export const CARS = RAW.map(derive);
+export const CARS = RAW.map(raw => deriveCarSpec(raw));
 export const CAR_BY_ID = Object.fromEntries(CARS.map((c) => [c.id, c]));
 
 export const PAINTS = [

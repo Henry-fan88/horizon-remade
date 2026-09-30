@@ -354,7 +354,7 @@ export class NetClient {
     for (const id of [...g.audio.engines.keys()]) if (id.startsWith('net') && !keep.has(id)) g.audio.removeEngine(id);
     for (const e of nearEngines.slice(0, 4)) {
       const id = 'net' + e.p.id;
-      if (!g.audio.engines.has(id)) g.audio.createEngine(id, e.p.spec.sound, true);
+      if (!g.audio.engines.has(id)) g.audio.createEngine(id, e.p.spec.sound, true, e.p.spec);
       g.audio.updateEngine(id, e.rpm, 0.5, 0, null, 0.8, e.pos);
     }
     // lobby banner countdown

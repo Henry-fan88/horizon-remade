@@ -9,7 +9,7 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { buildBody } from './carmodel.js';
+import { fitRing, steeringFrame, installInsideShading } from './cockpit.js';
 
 let source = null;
 let loading = null;
@@ -29,7 +29,7 @@ export function preloadRealCar() {
       gltf.scene.updateMatrixWorld(true);
       const wheels = wheelNames.map((name) => gltf.scene.getObjectByName(name));
       if (wheels.some((wheel) => !wheel)) throw new Error('Ferrari asset is missing its four named wheel assemblies');
-      source = { root: gltf.scene, wheels };
+      source = { root: gltf.scene, wheels, steering: gltf.scene.getObjectByName('steering_wheel') };
       console.info('[horizon] Ferrari 458 visual ready');
       return true;
     })
@@ -247,6 +247,9 @@ function fitGeometry(style) {
   const bodyMatrix = new THREE.Matrix4().makeScale(scale.x, scale.y, scale.z).multiply(turnForward).multiply(new THREE.Matrix4().makeTranslation(-centerX, 0, -centerZ));
   const wheelNodes = new Set(source.wheels);
   const buckets = new Map();
+  // the steering wheel (not its column) is kept apart so the in-car view can turn it
+  const steeringParts = [];
+  let rim = null;
   source.root.traverse((mesh) => {
     if (!mesh.isMesh) return;
     let parent = mesh.parent;
@@ -256,6 +259,11 @@ function fitGeometry(style) {
     }
     const geometry = mesh.geometry.clone().applyMatrix4(new THREE.Matrix4().multiplyMatrices(bodyMatrix, mesh.matrixWorld));
     const role = materialRole(mesh);
+    if (mesh.parent === source.steering && mesh.name !== 'steering_column') {
+      steeringParts.push(tagged(geometry, role));
+      if (mesh.name === 'steering_leather') rim = geometry;
+      return;
+    }
     if (mesh.name === 'lights_red') {
       for (const part of splitRearLamps(geometry, -style.WB / 2)) addGeometry(buckets, part.role, part.geometry);
     } else addGeometry(buckets, role, geometry);
@@ -301,8 +309,9 @@ function fitGeometry(style) {
     return out;
   };
   const lods = [lod(0.035, 0.03), lod(0.09, 0.07)];
-  // shadow caster: the lofted body of the matching procedural style plus plain wheels
-  const shadowParts = [buildBody(style).geo.clone()];
+  // shadow caster: the coarse painted shell and exterior trim plus plain wheels. The glass
+  // is left out so sunlight reaches the cabin through the windows (in-car camera).
+  const shadowParts = [lods[1].body.paint, clusterDecimate(mergeAll(plainExterior.map((g) => g.clone())), 0.09)].filter(Boolean);
   for (const [x, z, rr] of [
     [style.trackF / 2, style.WB / 2, radiusF],
     [-style.trackF / 2, style.WB / 2, radiusF],
@@ -330,7 +339,14 @@ function fitGeometry(style) {
       return tagged(g, 'plastic');
     })
   );
-  const out = { body, wheels, lods, shadow, calipers, reverse, bodyBounds };
+  let steering = null;
+  if (steeringParts.length && rim) {
+    const ring = fitRing(rim.getAttribute('position').array);
+    const frame = steeringFrame(ring.center, ring.axis);
+    const toLocal = frame.clone().invert();
+    steering = { frame, geometry: mergeAll(steeringParts.map((g) => g.applyMatrix4(toLocal))) };
+  }
+  const out = { body, wheels, lods, shadow, calipers, reverse, bodyBounds, steering };
   fitted.set(key, out);
   return out;
 }
@@ -390,6 +406,10 @@ export function buildRealCar(style, paint = {}, paintMat) {
   if (!source) return null;
   const geometry = fitGeometry(style);
   const materials = makeMaterials(paint, style, paintMat);
+  // in-car view: the painted shell shows dark trim on its inside, the glass turns clear
+  installInsideShading(paintMat);
+  paintMat.userData.cabinRole = 'shell';
+  materials.glass.userData.cabinRole = 'glass';
   const group = new THREE.Group();
   group.name = 'Ferrari 458 Italia';
   group.userData.visualAsset = 'ferrari-458';
@@ -447,6 +467,19 @@ export function buildRealCar(style, paint = {}, paintMat) {
     group.add(steer);
     return { x, z, r, w: width, front, side, baseY: r, steer, spin, caliper };
   });
+  // The steering wheel turns about its frame's +Z axis (see Vehicle.syncVisual).
+  let steeringWheel = null;
+  if (geometry.steering) {
+    const mount = new THREE.Group();
+    mount.name = '458:steering';
+    mount.applyMatrix4(geometry.steering.frame);
+    steeringWheel = new THREE.Group();
+    const wheelMesh = new THREE.Mesh(geometry.steering.geometry, materials.plain);
+    wheelMesh.receiveShadow = true;
+    steeringWheel.add(wheelMesh);
+    mount.add(steeringWheel);
+    group.add(mount);
+  }
   // Subtle white reversing lenses below the rear lamp clusters.
   const reverseLamps = new THREE.Mesh(geometry.reverse, materials.reverse);
   reverseLamps.name = '458:reverse';
@@ -463,6 +496,8 @@ export function buildRealCar(style, paint = {}, paintMat) {
     lights,
     zF: geometry.bodyBounds.max.z,
     zR: geometry.bodyBounds.min.z,
+    steeringWheel,
+    preparePaint: (material) => material,
     // pick the level of detail for a camera this far away (metres)
     setLodDistance(d) {
       const l = d < LOD_DIST[0] ? 0 : d < LOD_DIST[1] ? 1 : 2;
@@ -471,6 +506,7 @@ export function buildRealCar(style, paint = {}, paintMat) {
       levels.forEach((g, i) => (g.visible = i === l));
       wheelMeshes.forEach((list, i) => list.forEach((m) => (m.visible = i === l)));
       for (const w of wheels) w.caliper.visible = l < 2;
+      if (steeringWheel) steeringWheel.visible = l < 2;
     },
     dispose() {
       if (disposed) return;

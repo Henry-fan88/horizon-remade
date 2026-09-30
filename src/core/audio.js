@@ -1,5 +1,9 @@
 // WebAudio sound engine: synthesized engines, tyres, wind, impacts, UI and a radio bus.
+// Engines run in an AudioWorklet (engine-worklet.js) that fires each cylinder in its real
+// firing order through a modelled exhaust; the older oscillator engine is the fallback.
 import { clamp, lerp } from './math.js';
+import { engineProfile } from './engine-profiles.js';
+import engineWorkletUrl from './engine-worklet.js?url';
 
 const PROFILES = {
   v8: { cyl: 8, sub: 0.9, saw: 0.55, sq: 0.25, noise: 0.35, cutoff: 900, rough: 0.35, drive: 3.2 },
@@ -57,6 +61,17 @@ export class AudioEngine {
     this.shaperCurve = makeShaper(2.5);
     this.buildEnvLoops();
     this.ready = true;
+    // engines created before the worklet module loads are upgraded once it is ready
+    this.worklet = false;
+    this.workletLoading = ctx.audioWorklet
+      ? ctx.audioWorklet
+          .addModule(engineWorkletUrl)
+          .then(() => {
+            this.worklet = true;
+            for (const [id, e] of this.engines) if (!e.node) this.upgradeEngine(id, e);
+          })
+          .catch((err) => console.warn('[horizon] engine worklet unavailable; using oscillator engines', err))
+      : null;
   }
 
   setVolumes(v) {
@@ -119,6 +134,17 @@ export class AudioEngine {
     this.roadGain = ctx.createGain();
     this.roadGain.gain.value = 0;
     rn.connect(this.roadLP).connect(this.roadGain).connect(this.sfxBus);
+    // circuit kerbs: a buzz whose pitch follows speed over the ridges (~0.3 m apart)
+    this.kerbOsc = ctx.createOscillator();
+    this.kerbOsc.type = 'sawtooth';
+    this.kerbOsc.frequency.value = 60;
+    this.kerbLP = ctx.createBiquadFilter();
+    this.kerbLP.type = 'lowpass';
+    this.kerbLP.frequency.value = 420;
+    this.kerbGain = ctx.createGain();
+    this.kerbGain.gain.value = 0;
+    this.kerbOsc.connect(this.kerbLP).connect(this.kerbGain).connect(this.sfxBus);
+    this.kerbOsc.start();
     // metal scraping along a wall or rail: gritty band-passed noise
     const sn = this.noiseSource();
     this.scrapeBP = ctx.createBiquadFilter();
@@ -146,8 +172,49 @@ export class AudioEngine {
   }
 
   // --------------------------------------------------------------- engines
-  createEngine(id, profileName, positional = false) {
+  createEngine(id, profileName, positional = false, spec = null) {
     if (!this.ready) return null;
+    if (this.worklet) return this.createWorkletEngine(id, profileName, positional, spec);
+    const e = this.createOscEngine(id, profileName, positional);
+    if (e) Object.assign(e, { profileName, spec, positional });
+    return e;
+  }
+
+  // positional output chain shared by both engine kinds
+  engineOutput(positional) {
+    const ctx = this.ctx;
+    const out = ctx.createGain();
+    out.gain.value = 0;
+    let panner = null;
+    if (positional) {
+      panner = ctx.createPanner();
+      panner.panningModel = 'equalpower';
+      panner.distanceModel = 'inverse';
+      panner.refDistance = 8;
+      panner.rolloffFactor = 1.4;
+      out.connect(panner).connect(this.engineBus);
+    } else out.connect(this.engineBus);
+    return { out, panner };
+  }
+
+  createWorkletEngine(id, profileName, positional, spec) {
+    const ctx = this.ctx;
+    const node = new AudioWorkletNode(ctx, 'engine-synth', { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { profile: engineProfile(profileName, spec) } });
+    const { out, panner } = this.engineOutput(positional);
+    out.gain.value = 1;
+    node.connect(out);
+    const e = { id, node, out, panner, profileName, spec, positional, last: {} };
+    this.engines.set(id, e);
+    return e;
+  }
+
+  // swap an oscillator engine for the synthesized one when the worklet finishes loading
+  upgradeEngine(id, old) {
+    this.removeEngine(id);
+    this.createWorkletEngine(id, old.profileName, old.positional, old.spec);
+  }
+
+  createOscEngine(id, profileName, positional = false) {
     const ctx = this.ctx;
     const pr = PROFILES[profileName] || PROFILES.v8;
     const out = ctx.createGain();
@@ -222,6 +289,17 @@ export class AudioEngine {
   removeEngine(id) {
     const e = this.engines.get(id);
     if (!e) return;
+    if (e.node) {
+      e.out.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
+      setTimeout(() => {
+        e.node.port.postMessage({ stop: true });
+        e.node.disconnect();
+        e.out.disconnect();
+        e.panner?.disconnect();
+      }, 300);
+      this.engines.delete(id);
+      return;
+    }
     try {
       e.out.gain.setTargetAtTime(0, this.ctx.currentTime, 0.05);
       setTimeout(() => {
@@ -234,11 +312,25 @@ export class AudioEngine {
     this.engines.delete(id);
   }
 
-  updateEngine(id, rpm, throttle, load, boost, volume = 1, pos = null, spec = null) {
+  // opts: { cut (ignition cut: rev limiter / shift), shift (+1/-1 on a gear change),
+  //         interior (0..1, heard from the driver's seat) }
+  updateEngine(id, rpm, throttle, load, boost, volume = 1, pos = null, spec = null, opts = null) {
     const e = this.engines.get(id);
     if (!e || !this.ready) return;
     const ctx = this.ctx;
     const t = ctx.currentTime;
+    if (e.node) {
+      const m = e.last;
+      m.rpm = rpm;
+      m.throttle = throttle;
+      m.gain = volume;
+      m.cut = !!opts?.cut;
+      m.interior = opts?.interior ?? 0;
+      m.shift = opts?.shift || 0;
+      e.node.port.postMessage(m);
+      if (pos && e.panner) this.placePanner(e.panner, pos, t);
+      return;
+    }
     const pr = e.pr;
     const tc = 0.02;
     if (pr.cyl === 0) {
@@ -273,13 +365,15 @@ export class AudioEngine {
       e.boost = throttle < 0.1 ? 0 : boost;
     }
     e.throttle = throttle;
-    if (pos && e.panner) {
-      if (e.panner.positionX) {
-        e.panner.positionX.setTargetAtTime(pos.x, t, 0.05);
-        e.panner.positionY.setTargetAtTime(pos.y, t, 0.05);
-        e.panner.positionZ.setTargetAtTime(pos.z, t, 0.05);
-      } else e.panner.setPosition(pos.x, pos.y, pos.z);
-    }
+    if (pos && e.panner) this.placePanner(e.panner, pos, t);
+  }
+
+  placePanner(panner, pos, t) {
+    if (panner.positionX) {
+      panner.positionX.setTargetAtTime(pos.x, t, 0.05);
+      panner.positionY.setTargetAtTime(pos.y, t, 0.05);
+      panner.positionZ.setTargetAtTime(pos.z, t, 0.05);
+    } else panner.setPosition(pos.x, pos.y, pos.z);
   }
 
   setListener(pos, fwd, up) {
@@ -303,17 +397,22 @@ export class AudioEngine {
   }
 
   // --------------------------------------------------------------- continuous env sounds
-  updateEnv(speed, squeal, offroad, grounded) {
+  // interior 0..1: from the driver's seat the wind is a muffled rush and the tyres rumble
+  // through the floor
+  updateEnv(speed, squeal, offroad, grounded, interior = 0, kerb = 0) {
     if (!this.ready) return;
     const t = this.ctx.currentTime;
-    this.squealGain.gain.setTargetAtTime(clamp(squeal, 0, 1) * 0.16 * (1 - offroad), t, 0.04);
+    this.kerbGain.gain.setTargetAtTime(grounded && kerb > 0 && speed > 4 ? clamp(kerb * 2, 0, 1) * clamp(speed / 25, 0.3, 1) * 0.22 * (1 + interior * 0.3) : 0, t, 0.03);
+    this.kerbOsc.frequency.setTargetAtTime(clamp(speed / 0.3, 20, 180), t, 0.03);
+    const cabin = 1 - interior;
+    this.squealGain.gain.setTargetAtTime(clamp(squeal, 0, 1) * 0.16 * (1 - offroad) * (1 - interior * 0.45), t, 0.04);
     this.squealBP.frequency.setTargetAtTime(900 + squeal * 500 + Math.sin(t * 13) * 60, t, 0.05);
-    this.gravelGain.gain.setTargetAtTime(grounded ? clamp(speed / 30, 0, 1) * 0.22 * offroad + squeal * 0.12 * offroad : 0, t, 0.05);
-    this.gravelLP.frequency.setTargetAtTime(400 + speed * 12, t, 0.1);
+    this.gravelGain.gain.setTargetAtTime(grounded ? (clamp(speed / 30, 0, 1) * 0.22 * offroad + squeal * 0.12 * offroad) * (1 + interior * 0.3) : 0, t, 0.05);
+    this.gravelLP.frequency.setTargetAtTime((400 + speed * 12) * (1 - interior * 0.4), t, 0.1);
     const w = clamp(speed / 85, 0, 1);
-    this.windGain.gain.setTargetAtTime(w * w * 0.2, t, 0.1);
-    this.windLP.frequency.setTargetAtTime(300 + speed * 18, t, 0.1);
-    this.roadGain.gain.setTargetAtTime(grounded ? clamp(speed / 40, 0, 1) * 0.12 * (1 - offroad) : 0, t, 0.08);
+    this.windGain.gain.setTargetAtTime(Math.pow(w, 1.6) * 0.2 * (0.55 + 0.45 * cabin), t, 0.1);
+    this.windLP.frequency.setTargetAtTime((300 + speed * 18) * (0.45 + 0.55 * cabin), t, 0.1);
+    this.roadGain.gain.setTargetAtTime(grounded ? clamp(speed / 40, 0, 1) * 0.12 * (1 - offroad) * (1 + interior * 0.8) : 0, t, 0.08);
   }
 
   // --------------------------------------------------------------- one-shots

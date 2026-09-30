@@ -8,8 +8,8 @@ Original model by **Jiaxing**.
 - Downloaded from Sketchfab using the account's normal download interface on 2026-09-29.
 - Source file: `ford_mustang_shelby_gt500.glb`
 - Source SHA-256: `0b67d50e058bd01b63e0a361674d1e301d6e161f5231147cf11e84ee991fe5f9`
-- Adapted GLB SHA-256: `9e9238badabab753d657f313f1cb3d0add1688567150044a0d544a0f02ce7033`
+- Adapted GLB SHA-256: `073bf9f04f3c996136fbfeea91b1573fc0f9b13771c5fafd5a837b993f423f63`
 
-Normalized scale and axle positions; separated steering, spinning wheels and stationary brakes; merged compatible meshes; generated three distance levels; compressed geometry with Draco; resized working textures to at most 2048 pixels. Runtime adaptations add adjustable paint, calibrated materials, lamps and a simplified shadow caster.
+Normalized scale and axle positions; separated steering, spinning wheels and stationary brakes; merged compatible meshes; generated three distance levels; compressed geometry with Draco; resized working textures to at most 2048 pixels. The steering wheel is a separate mount so the in-car camera can show it turning. Runtime adaptations add adjustable paint, calibrated materials, lamps and a simplified shadow caster.
 
 The source download is unchanged. The preparation script is `tools/car-assets/prepare.py`. `geometry.json` records the prepared dimensions and triangle counts. Keep this credit and the CC BY 4.0 notice with redistributions. Vehicle names and marks remain the property of their owners.

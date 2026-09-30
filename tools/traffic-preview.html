@@ -1,0 +1,37 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Civilian traffic · Horizon</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#141b21;color:#e8eef1;font:14px system-ui}main{max-width:1500px;margin:auto;padding:26px}header{display:flex;justify-content:space-between;align-items:center}h1{font-size:25px;font-weight:550;margin:7px 0 20px}small{color:#91a4ae;letter-spacing:.14em}a{color:#abcbd6}#stage{height:70vh;min-height:400px;border:1px solid #3a4850;border-radius:12px;overflow:hidden}canvas{display:block}nav{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:18px 0}button,select{background:#25323b;color:#e8eef1;border:1px solid #546570;border-radius:5px;padding:8px;font:inherit}label{display:flex;align-items:center;gap:8px}output{color:#b3d8c7}p{font-size:12px;color:#94a6b2}#legend{display:flex;gap:18px;flex-wrap:wrap;margin:14px 0;font-size:12px}
+</style><main><header><div><small>HORIZON / EVERYDAY TRAFFIC</small><h1>A neighborhood on wheels</h1></div><a href="../">Back to game ↗</a></header><section id="stage" aria-label="Eight civilian vehicles"></section><nav><label>Vehicle <select id="model"><option value="all">All eight vehicles</option></select></label><label>Detail <select id="detail"><option value="1">Near</option><option value="4">Medium</option><option value="14">Far</option></select></label><button id="paints">Change paint colors</button><button id="rear">Rear view</button><output id="status">Loading civilian models…</output></nav><div id="legend"></div><p>Drag to orbit · scroll to inspect. Actual ambient traffic meshes, materials, and instancing. Generic passenger car pack by <a href="https://sketchfab.com/3d-models/generic-passenger-car-pack-20f9af9b8a404d5cb022ac6fe87f21f5">Comrade1280</a> · CC BY 4.0.</p></main>
+<script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+import {preloadTrafficCars, getTrafficModel} from '/src/vehicle/trafficmodels.js';
+import {TRAFFIC_SPECS, TRAFFIC_COLORS} from '/src/vehicle/trafficspecs.js';
+import {TrafficSystem} from '/src/game/traffic.js';
+const stage=document.querySelector('#stage'),status=document.querySelector('#status');
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,1.5));renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=.85;renderer.shadowMap.enabled=true;renderer.shadowMap.type=THREE.PCFShadowMap;stage.append(renderer.domElement);
+const scene=new THREE.Scene();scene.background=new THREE.Color('#29333c');
+const camera=new THREE.PerspectiveCamera(37,1,.1,2000);
+const pmrem=new THREE.PMREMGenerator(renderer),room=new RoomEnvironment();scene.environment=pmrem.fromScene(room,.04).texture;room.dispose();pmrem.dispose();
+scene.add(new THREE.HemisphereLight(0xe0eeff,0x697267,1.4));
+const sun=new THREE.DirectionalLight(0xfff4e7,2.6);sun.position.set(-10,20,10);sun.castShadow=true;sun.shadow.mapSize.set(2048,2048);Object.assign(sun.shadow.camera,{left:-20,right:20,top:20,bottom:-20,near:1,far:80});sun.shadow.normalBias=.02;scene.add(sun);
+const floor=new THREE.Mesh(new THREE.PlaneGeometry(3000,3000),new THREE.MeshStandardMaterial({color:0x353e43,roughness:.85}));floor.rotation.x=-Math.PI/2;floor.position.y=-.01;floor.receiveShadow=true;scene.add(floor);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.maxPolarAngle=Math.PI/2-.015;
+new ResizeObserver(()=>{renderer.setSize(stage.clientWidth,stage.clientHeight);camera.aspect=stage.clientWidth/stage.clientHeight;camera.updateProjectionMatrix()}).observe(stage);
+await preloadTrafficCars();
+const traffic=new TrafficSystem({scene,camera,world:{network:{roads:[]}}},8);
+let paintOffset=0,rear=false;
+const select=document.querySelector('#model');
+for(const spec of TRAFFIC_SPECS){select.add(new Option(spec.model,spec.id));const label=document.createElement('span');label.textContent=spec.model;document.querySelector('#legend').append(label)}
+function pose(){
+ const all=select.value==='all';
+ for(const [i,car] of traffic.cars.entries()){
+  car.alive=all||car.spec.id===select.value;car.body.pos.set(all?(i%4-1.5)*5.5:0,0,all?(Math.floor(i/4)-.5)*7:0);car.body.quat.setFromAxisAngle(new THREE.Vector3(0,1,0),-.3);car.color=TRAFFIC_COLORS[(i+paintOffset)%TRAFFIC_COLORS.length];
+ }
+ const tier=document.querySelector('#detail').value,v=all?new THREE.Vector3(8,10,22):new THREE.Vector3(5,3,7);const scale=tier==='1'?1:(tier==='4'?150:500)/Math.hypot(v.x,v.z);if(rear)v.z*=-1;
+ camera.position.copy(v.multiplyScalar(scale));camera.fov=2*Math.atan(Math.tan(THREE.MathUtils.degToRad(37/2))/scale)*180/Math.PI;camera.updateProjectionMatrix();controls.target.set(0,.7,0);controls.update();
+}
+select.onchange=pose;document.querySelector('#detail').onchange=pose;document.querySelector('#paints').onclick=()=>{paintOffset++;pose()};document.querySelector('#rear').onclick=e=>{rear=!rear;e.target.textContent=rear?'Front view':'Rear view';pose()};pose();
+let frame=0;function render(){requestAnimationFrame(render);controls.update();camera.updateMatrixWorld();traffic.writeInstances();renderer.render(scene,camera);if(++frame%20===0){const count=traffic.styles.reduce((n,s)=>n+s.used.reduce((a,b)=>a+b,0),0);status.textContent=`${count} civilian vehicles · ${renderer.info.render.triangles.toLocaleString()} triangles · ${traffic.styles.every(s=>getTrafficModel(s.spec.style.trafficAsset))?'All models loaded':'Asset missing'}`;status.dataset.models=String(count);status.dataset.ready=String(traffic.styles.every(s=>getTrafficModel(s.spec.style.trafficAsset)));}}render();
+</script></html>

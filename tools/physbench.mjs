@@ -61,7 +61,7 @@ async function islandWorld() {
         },
     surfaceAt(x, z) {
       const r = network.nearest(x, z, 24, null, near);
-      if (r && r.dist < r.road.width / 2 + 0.25) return r.road.kind === 'dirt' ? SURF.DIRTROAD : SURF.ROAD;
+      if (r && r.dist < r.road.width / 2 + 0.25) return r.road.surface ?? (r.road.kind === 'dirt' ? SURF.DIRTROAD : SURF.ROAD);
       const S = WORLD.res + 1;
       const ix = Math.max(0, Math.min(WORLD.res, Math.round((x + hf.half) / hf.cell)));
       const iz = Math.max(0, Math.min(WORLD.res, Math.round((z + hf.half) / hf.cell)));
@@ -403,7 +403,7 @@ if (mode === 'crash') {
   }
   // two cars: T-bone
   const a = makeCar('gt', world),
-    b = makeCar('rally', world);
+    b = makeCar('shelby', world);
   a.reset(0, 0, 0, 0);
   a.pos.y = a.cgH + 0.02;
   a.vel.set(0, 0, 60 / 3.6);

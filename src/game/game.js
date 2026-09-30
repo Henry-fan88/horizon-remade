@@ -12,6 +12,7 @@ import { CAR_BY_ID } from '../vehicle/carspecs.js';
 import { buildCar } from '../vehicle/carmodel.js';
 import { preloadRealCar } from '../vehicle/realcar.js';
 import { preloadImportedCars } from '../vehicle/importedcars.js';
+import { preloadTrafficCars } from '../vehicle/trafficmodels.js';
 import { measureAllCars } from '../vehicle/carperf.js';
 import { Effects } from '../vehicle/effects.js';
 import { Input } from '../core/input.js';
@@ -23,6 +24,7 @@ import { buildEvents, makeEventMarker, EVENT_COLORS } from './events.js';
 import { RaceManager } from './race.js';
 import { StuntSystem } from './stunts.js';
 import { TrafficSystem } from './traffic.js';
+import { CityLife } from './citylife.js';
 import { RoadGraph, distToPolyline } from './gps.js';
 import { Save, Progression } from './progression.js';
 import { Rewind } from './rewind.js';
@@ -108,7 +110,7 @@ export class Game {
     this.world = new World(this.scene);
     // Load local car geometry in parallel with world generation. All car builders
     // stay synchronous, including garage thumbnails and networked vehicles.
-    const carAssetsReady = Promise.all([preloadRealCar(), preloadImportedCars()]);
+    const carAssetsReady = Promise.all([preloadRealCar(), preloadImportedCars(), preloadTrafficCars()]);
     // garage figures come from driving each car's physics, not a formula
     measureAllCars();
     const surfaceAssetsReady = preloadSurfaceAssets(renderer.capabilities.getMaxAnisotropy());
@@ -133,7 +135,7 @@ export class Game {
     this.viewpoint = LOCATIONS.viewpoint;
 
     // UI + systems
-    this.mapImages = renderMapImages(this.world, 1024);
+    this.mapImages = renderMapImages(this.world, 1536);
     this.ui = document.getElementById('ui');
     this.hud = new HUD(this.ui, this.mapImages);
     this.gameCam = new GameCamera(this.camera);
@@ -166,7 +168,7 @@ export class Game {
     this.stunts = new StuntSystem(this, this.events.stunts);
     this.buildEventMarkers();
     this.graph = new RoadGraph(this.world.network);
-    this.traffic = new TrafficSystem(this, 28);
+    this.traffic = new TrafficSystem(this, 44);
     this.rewind = new Rewind(this);
     this.menus = new Menus(this);
     this.worldMap = new WorldMap(this, this.mapImages);
@@ -182,6 +184,7 @@ export class Game {
     const cur = this.save.currentCar;
     const forced = this.params.get('car');
     this.player = this.spawnPlayer(forced && CAR_BY_ID[forced] ? { id: forced, paint: {} } : cur);
+    this.cityLife = new CityLife(this);
     this.buildHeroCar();
     this.applySettings();
     this.resize();
@@ -202,7 +205,7 @@ export class Game {
     const unlock = () => {
       this.audio.init();
       this.audio.setVolumes({ master: this.settings.masterVolume, engine: this.settings.engineVolume, music: this.settings.musicVolume, sfx: this.settings.sfxVolume });
-      if (!this.audio.engines.has('player')) this.audio.createEngine('player', this.player.spec.sound);
+      if (!this.audio.engines.has('player')) this.audio.createEngine('player', this.player.spec.sound, false, this.player.spec);
       if (this.settings.radio && !this.radio.playing && this.state !== 'title' && this.state !== 'loading') this.radio.start();
     };
     addEventListener('pointerdown', unlock);
@@ -564,7 +567,7 @@ export class Game {
     this.player = this.spawnPlayer(this.save.currentCar);
     this.player.place(pos.x, pos.z, heading);
     this.audio.removeEngine('player');
-    if (this.audio.ready) this.audio.createEngine('player', this.player.spec.sound);
+    if (this.audio.ready) this.audio.createEngine('player', this.player.spec.sound, false, this.player.spec);
     this.gameCam.snap();
     this.rewind.clear();
     this.net.profileChanged();
@@ -580,8 +583,8 @@ export class Game {
   onSmash(o, phys, speed) {
     const isPlayer = phys === this.player.physics;
     if (isPlayer) this.audio.smash();
-    const col = o.kind === 'bush' ? [0.3, 0.45, 0.2] : o.kind === 'board' ? [1.0, 0.55, 0.1] : [0.55, 0.42, 0.3];
-    this.effects.debris(o.x, o.y, o.z, phys.vel.x, phys.vel.z, col, o.kind === 'board' ? 34 : 12);
+    const col = o.kind === 'bush' ? [0.3, 0.45, 0.2] : o.kind === 'board' ? [1.0, 0.55, 0.1] : o.kind === 'post' ? [0.85, 0.85, 0.82] : [0.55, 0.42, 0.3];
+    this.effects.debris(o.x, o.y, o.z, phys.vel.x, phys.vel.z, col, o.kind === 'board' ? 34 : o.kind === 'post' ? 6 : 12);
     if (o.onSmash) o.onSmash(o, phys, speed);
     if (isPlayer && o.kind !== 'board') this.skills.wreck(o.kind);
   }
@@ -704,6 +707,8 @@ export class Game {
         this.gameCam.update(dt, this.player, this.world);
       }
     }
+    // the cabin renders from inside only while the camera sits in the driver's seat
+    this.player.setInteriorView(this.gameCam.inCar && (this.state === 'freeroam' || this.state === 'race' || this.state === 'results') && this.race.active?.state !== 'intro');
     // environment + world streaming
     this.env.update(dt, this.inspectionFocus || this.player.root.position);
     this.farShadow.update(this._lightDir.subVectors(this.env.sun.position, this.env.sun.target.position).normalize());
@@ -711,6 +716,8 @@ export class Game {
     this.env.skyView.mesh.position.copy(this.camera.position);
     this.world.update(dt, this.camera, this.env);
     this.props.update(dt, this.env);
+    this.cityLife.update(dt);
+    if (this.state === 'environment-inspection') this.traffic.update(dt, this.player);
     this.updateCarDetail(dt);
     for (const m of this.markers) {
       m.obj.userData.beam.material.uniforms.time.value = this.time;
@@ -725,9 +732,11 @@ export class Game {
     // fade + post
     this.fade += (this.fadeTarget - this.fade) * Math.min(1, dt * 9);
     this.post.uniforms.fade.value = this.fade;
-    this.post.uniforms.exposure.value = this.env.exposure;
-    const kmh = this.player.physics.speed * 3.6;
-    this.post.uniforms.speedBlur.value = this.settings.motionBlur && this.gameCam.mode <= 1 && this.state !== 'title' ? clamp((kmh - 110) / 220, 0, 1) : 0;
+    // eyes adapt to the darker cabin in the driver's seat
+    this._cabinExposure = (this._cabinExposure ?? 1) + ((this.player.interior ? 1.25 : 1) - (this._cabinExposure ?? 1)) * Math.min(1, dt * 3);
+    this.post.uniforms.exposure.value = this.env.exposure * this._cabinExposure;
+    const onRoad = (this.state === 'freeroam' || this.state === 'race' || this.state === 'results') && this.race.active?.state !== 'intro';
+    this.post.uniforms.speedBlur.value = this.settings.motionBlur && onRoad ? this.gameCam.blur : 0;
     this.updateProbe(dt);
     this.updateDynamicRes(dt);
     this.post.render(this.scene, this.camera, dt);
@@ -738,7 +747,8 @@ export class Game {
   // car is hidden (and stops turning) once you are away from the festival.
   updateCarDetail(dt) {
     const cam = this.camera.position;
-    for (const v of this.vehicles) v.model.setLodDistance?.(cam.distanceTo(v.root.position));
+    // other drivers' cars drop to lighter detail sooner than the player's own car
+    for (const v of this.vehicles) v.model.setLodDistance?.(cam.distanceTo(v.root.position) * (v === this.player ? 1 : 2.4));
     const hero = this.heroCar;
     if (hero) {
       const d = cam.distanceTo(hero.group.position);
@@ -789,7 +799,7 @@ export class Game {
     this._probeT = (this._probeT || 0) + dt;
     if (probe.ready && this._probeT < perFace) return;
     this._probeT = 0;
-    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, ...this.markers.map((m) => m.obj)];
+    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, ...this.markers.map((m) => m.obj)];
     const hide = this._probeList || (this._probeList = []);
     hide.length = 0;
     for (const o of this._probeHide) hide.push(o);
@@ -994,7 +1004,12 @@ export class Game {
     const p = this.player.physics;
     const spec = this.player.spec;
     const active = (this.state === 'freeroam' || this.state === 'race') && !this.paused;
-    a.updateEngine('player', p.rpm, active ? p.throttleOut : 0.08, 0, spec.turbo ? p.boost : null, active ? 1 : this.state === 'title' ? 0.25 : 0.35);
+    const inCab = this.player.interior ? 1 : 0;
+    const eo = this._engineOpts || (this._engineOpts = {});
+    eo.cut = p.revLimiter > 0;
+    eo.shift = p.justShifted || 0;
+    eo.interior = inCab;
+    a.updateEngine('player', p.rpm, active ? p.throttleOut : 0.08, 0, spec.turbo ? p.boost : null, active ? 1 : this.state === 'title' ? 0.25 : 0.35, null, spec, eo);
     let slip = 0,
       n = 0;
     for (const w of p.wheels)
@@ -1002,7 +1017,7 @@ export class Game {
         slip = Math.max(slip, w.slip > 0.4 ? (w.slip - 0.4) / 0.6 : 0);
         n++;
       }
-    a.updateEnv(active ? p.speed : 0, active && p.speed > 3 ? slip : 0, p.offroadFactor, n > 0);
+    a.updateEnv(active ? p.speed : 0, active && p.speed > 3 ? slip : 0, p.offroadFactor, n > 0, inCab, active ? p.kerbFactor || 0 : 0);
     const cam = this.camera;
     const fwd = this._lf || (this._lf = new THREE.Vector3());
     a.setListener(cam.position, fwd.set(0, 0, -1).applyQuaternion(cam.quaternion), cam.up);
@@ -1032,7 +1047,7 @@ export class Game {
       const r = near[k];
       if (!r) continue;
       const id = r.audioId || (r.audioId = 'ai' + r.v.root.id);
-      if (!a.engines.has(id)) a.createEngine(id, r.v.spec.sound, true);
+      if (!a.engines.has(id)) a.createEngine(id, r.v.spec.sound, true, r.v.spec);
       a.updateEngine(id, r.v.physics.rpm, r.v.physics.throttleOut, 0, null, 0.9, r.v.physics.pos);
     }
   }

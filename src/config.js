@@ -8,8 +8,8 @@ export const FESTIVAL_NAME = 'Horizon Isla Festival';
 
 export const WORLD = {
   seed: 20260927,
-  size: 4096, // metres, world spans [-size/2, size/2] on X and Z
-  res: 1024, // heightfield cells per side (4 m cells)
+  size: 6144, // metres, world spans [-size/2, size/2] on X and Z
+  res: 1536, // heightfield cells per side (4 m cells)
   seaLevel: 0,
   volcano: { x: -150, z: -560, radius: 720, height: 390, crater: 125, craterDepth: 70 },
 };

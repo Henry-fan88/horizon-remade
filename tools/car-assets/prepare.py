@@ -10,11 +10,14 @@ from mathutils import Vector, Matrix
 
 model, source, output = sys.argv[sys.argv.index('--') + 1:]
 output = Path(output); output.mkdir(parents=True, exist_ok=True)
-wb_target = {'shelby-gt500': 2.72, 'porsche-911-gt3': 2.457, 'mustang-fastback': 2.743}[model]
+wb_target = {'shelby-gt500': 2.72, 'porsche-911-gt3': 2.457, 'mustang-fastback': 2.743, 'mclaren-mp45': 2.896}[model]
 bpy.ops.wm.read_factory_settings(use_empty=True)
 bpy.ops.import_scene.gltf(filepath=source)
 bpy.context.view_layer.update()
 objects = [o for o in bpy.context.scene.objects if o.type == 'MESH' and len(o.data.materials)]
+# The authored group each mesh hangs under (e.g. 'front_wheels'), kept before flattening.
+for o in objects:
+    o['group'] = re.sub(r'_\d+$', '', o.parent.name) if o.parent else ''
 # Freeze imported transforms without retaining authoring rigs, animation or helper objects.
 for o in objects:
     world = o.matrix_world.copy()
@@ -71,8 +74,10 @@ elif model == 'porsche-911-gt3':
             (calipers if abs(c[1]-wc[1]) > .09 else wheel_parts)[index].append(o)
         else: body.append(o)
 else:
+    # Mustang: four wheels packed in each wheel mesh. McLaren: one mesh per axle.
+    is_wheel = (lambda o: o['group'] in ('front_wheels', 'back_wheels')) if model == 'mclaren-mp45' else (lambda o: material(o) == 'FordMustangWheels_MTL')
     for o in objects:
-        if material(o) != 'FordMustangWheels_MTL':
+        if not is_wheel(o):
             body.append(o); continue
         for i in range(4):
             mesh = o.data.copy()
@@ -90,10 +95,20 @@ else:
         bpy.data.objects.remove(o, do_unlink=True)
     centers = []
     tires = []
+    tread = []
     for parts in wheel_parts:
         lo = np.min([bounds(o)[0] for o in parts], axis=0)
         hi = np.max([bounds(o)[1] for o in parts], axis=0)
-        centers.append((lo+hi)/2)
+        c = (lo+hi)/2
+        if model == 'mclaren-mp45':
+            # the rear wheel meshes carry the driveshafts in to the gearbox: find the tyre
+            # (everything far from the axle) and take the wheel's centre and width from it
+            co = np.concatenate([points(o) for o in parts])
+            rad = np.hypot(co[:, 1]-c[1], co[:, 2]-c[2])
+            tyre = co[rad > .8*rad.max()]
+            c[0] = (tyre[:, 0].min()+tyre[:, 0].max())/2
+            tread.append(float(tyre[:, 0].max()-tyre[:, 0].min()))
+        centers.append(c)
         tires.append(parts[0])
 
 assert all(wheel_parts), 'All four authored wheel assemblies must be present'
@@ -105,11 +120,11 @@ radii = []
 widths = []
 for i, parts in enumerate(wheel_parts):
     # Tyres are separate on modern cars; use the full wheel bounds on the classic.
-    measures = [tires[i]] if model != 'mustang-fastback' else parts
+    measures = [tires[i]] if model not in ('mustang-fastback', 'mclaren-mp45') else parts
     lo = np.min([bounds(o)[0] for o in measures], axis=0)
     hi = np.max([bounds(o)[1] for o in measures], axis=0)
     radii.append(float(max(hi[1]-lo[1], hi[2]-lo[2])/2*scale))
-    widths.append(float((hi[0]-lo[0])*scale))
+    widths.append(float((tread[i] if model == 'mclaren-mp45' else hi[0]-lo[0])*scale))
 rF, rR = sum(radii[:2])/2, sum(radii[2:])/2
 trackF = float(abs(centers[0][0]-centers[1][0])*scale)
 trackR = float(abs(centers[2][0]-centers[3][0])*scale)
@@ -131,10 +146,60 @@ for o in body:
         elif m in ['r_lights', 'r_glass']: role = 'tail'
         elif m in ['lights', 'lights_glass']: role = 'head'
         elif m in ['glass', 'd_glass']: role = 'glass'
+    elif model == 'mclaren-mp45':
+        # the livery is one painted texture and stays as authored (not repaintable)
+        if m == 'body_mat': role = 'livery'
+        elif m == 'interior_mat': role = 'interior'
+        elif m == 'glass_details_mat': role = 'glass' if o['group'] == 'interior_details' else 'tail'
     else:
         if m == 'FordMustang_MTL': role = 'paint-atlas'
         elif m == 'FordMustangWindow_MTL': role = 'glass-atlas'
     o['role'] = role or m
+
+# In-car view. The driver's steering wheel becomes its own mount so the game can turn it,
+# and the cabin keeps more detail than the rest of the car. Values are in game space
+# (+X left, +Y up, +Z forward; Blender is (x, -z, y)): rim centre, column axis pointing at
+# the driver, and the cylinder (radius, depth towards the dash / the driver) that holds it.
+STEER = {
+    'shelby-gt500': dict(c=(0.363, 0.845, 0.153), n=(0, 0.323, -0.946), r=0.215, dash=0.075, driver=0.07),
+    'porsche-911-gt3': dict(c=(0.34, 0.786, 0.242), n=(-0.007, 0.298, -0.955), r=0.205, dash=0.075, driver=0.07),
+}.get(model)
+CABIN = {'porsche-911-gt3': ((-0.9, 0.3, -1.5), (0.9, 1.4, 1.0), 0.3)}.get(model)
+g2b = lambda v: Vector((v[0], -v[2], v[1]))
+steer_parts = []
+if model == 'mclaren-mp45':
+    # The steering wheel is authored as its own object: its mount frame comes from the rim
+    # itself (centre, and the plane's normal, pointing back at the driver).
+    steer_parts = [o for o in body if o['group'] == 'steering wheel']
+    for o in steer_parts: body.remove(o)
+    co = np.concatenate([points(o) for o in steer_parts])
+    mid = (co.min(axis=0) + co.max(axis=0)) / 2
+    axis = np.linalg.eigh(np.cov((co - co.mean(axis=0)).T))[1][:, 0]
+    if axis[1] < 0: axis = -axis  # Blender +Y = rearwards, towards the driver
+    STEER = dict(c=(mid[0], mid[2], -mid[1]), n=(axis[0], axis[2], -axis[1]))
+    print('steering wheel centre', [round(float(v), 3) for v in STEER['c']], 'axis', [round(float(v), 3) for v in STEER['n']])
+elif STEER:
+    c, n = g2b(STEER['c']), g2b(STEER['n']).normalized()
+    def inside(co):
+        d = co - c; a = d.dot(n)
+        return -STEER['dash'] <= a <= STEER['driver'] and (d - n*a).length <= STEER['r']
+    for o in list(body):
+        bm = bmesh.new(); bm.from_mesh(o.data)
+        inner = [f for f in bm.faces if all(inside(v.co) for v in f.verts)]
+        if not inner: bm.free(); continue
+        mesh = o.data.copy()
+        if len(inner) < len(bm.faces):
+            bmesh.ops.delete(bm, geom=inner, context='FACES'); bm.to_mesh(o.data)
+            bm2 = bmesh.new(); bm2.from_mesh(mesh)
+            bmesh.ops.delete(bm2, geom=[f for f in bm2.faces if not all(inside(v.co) for v in f.verts)], context='FACES')
+            bm2.to_mesh(mesh); bm2.free()
+        else:
+            body.remove(o)
+        bm.free()
+        part = bpy.data.objects.new(o.name+'_steer', mesh); bpy.context.collection.objects.link(part)
+        part['role'] = o.get('role'); steer_parts.append(part)
+        if o not in body: bpy.data.objects.remove(o, do_unlink=True)
+    print('steering wheel faces', sum(len(o.data.polygons) for o in steer_parts))
 
 # Make normalized parent groups: Blender Z-up becomes game Y-up in the GLB.
 root = bpy.data.objects.new('car', None); bpy.context.collection.objects.link(root)
@@ -159,9 +224,48 @@ for i, parts in enumerate(wheel_parts):
         o.parent = parent; o['role'] = 'caliper'
         o['stationary'] = True
 
+# Steering mount: local -Y (Blender) = column axis towards the driver, so in the GLB the
+# mount's +Z is the axis the game turns the wheel about.
+mounts = [body_root]+[bpy.data.objects.get(n) for n in names]
+if steer_parts:
+    yb = -g2b(STEER['n']).normalized(); up = Vector((0, 0, 1))
+    zb = (up - yb*up.dot(yb)).normalized(); xb = yb.cross(zb)
+    frame = Matrix(((xb.x, yb.x, zb.x, 0), (xb.y, yb.y, zb.y, 0), (xb.z, yb.z, zb.z, 0), (0, 0, 0, 1)))
+    frame.translation = g2b(STEER['c'])
+    steer_root = bpy.data.objects.new('steering', None); bpy.context.collection.objects.link(steer_root); steer_root.parent = root
+    steer_root.matrix_world = frame
+    to_local = frame.inverted()
+    for o in steer_parts:
+        o.data.transform(to_local); o.parent = steer_root; o['steer'] = True
+    mounts.append(steer_root)
+
 bpy.context.view_layer.update()
+budget = {'shelby-gt500': 170000, 'porsche-911-gt3': 230000, 'mustang-fastback': 190000, 'mclaren-mp45': 200000}[model]
+source_tris = sum(len(o.data.polygons) for o in bpy.context.scene.objects if o.type=='MESH')
+ratio = min(1, budget/source_tris)
+def simplify(obj, amount):
+    lo, hi = bounds(obj)
+    dec = obj.modifiers.new('Browser detail', 'DECIMATE'); dec.ratio = amount
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier=dec.name)
+    # Thin / non-manifold source parts can produce distant QEM outliers. Keep
+    # every LOD inside its authored envelope, including tyre width and roll bars.
+    co = np.clip(points(obj), lo, hi).astype(np.float32).ravel()
+    obj.data.vertices.foreach_set('co', co); obj.data.update()
+if CABIN:
+    # Decimate each authored part before merging, so cabin parts (seen from the driver's
+    # seat) keep far more detail than the underbody and engine bay.
+    (x0, y0, z0), (x1, y1, z1), cabin_ratio = CABIN
+    for o in body:
+        count = len(o.data.polygons)
+        mid = center(o)
+        in_cabin = x0 <= mid[0] <= x1 and -z1 <= mid[1] <= -z0 and y0 <= mid[2] <= y1
+        rr = 1 if count < 400 or o.get('role') == 'paint' else max(cabin_ratio if in_cabin else ratio, min(1, 400/count))
+        if rr < .98: simplify(o, rr)
+        o['pre'] = True
+
 # Merge by semantic role AND source material; keep texture sets and lamp controls.
-for parent in [body_root]+[bpy.data.objects.get(n) for n in names]:
+for parent in mounts:
     buckets = {}
     for o in list(parent.children):
         key = (o.get('role'), material(o), bool(o.get('stationary')))
@@ -174,21 +278,10 @@ for parent in [body_root]+[bpy.data.objects.get(n) for n in names]:
         merged = bpy.context.view_layer.objects.active
         merged.name = f'{parent.name}_{role}_{mat}'
         merged['role'] = role; merged['stationary'] = stationary
+        if parent.name == 'steering': merged['steer'] = True
 
 # Offline LODs keep download size and draw count bounded without runtime simplification.
 meshes = [o for o in bpy.context.scene.objects if o.type=='MESH']
-budget = {'shelby-gt500': 170000, 'porsche-911-gt3': 230000, 'mustang-fastback': 190000}[model]
-source_tris = sum(len(o.data.polygons) for o in meshes)
-ratio = min(1, budget/source_tris)
-def simplify(obj, amount):
-    lo, hi = bounds(obj)
-    dec = obj.modifiers.new('Browser detail', 'DECIMATE'); dec.ratio = amount
-    bpy.context.view_layer.objects.active = obj
-    bpy.ops.object.modifier_apply(modifier=dec.name)
-    # Thin / non-manifold source parts can produce distant QEM outliers. Keep
-    # every LOD inside its authored envelope, including tyre width and roll bars.
-    co = np.clip(points(obj), lo, hi).astype(np.float32).ravel()
-    obj.data.vertices.foreach_set('co', co); obj.data.update()
 for o in meshes:
     count = len(o.data.polygons)
     # Avoid erasing badges, lamp internals and thin trim.
@@ -196,6 +289,10 @@ for o in meshes:
     # The GT3 paint shell sits close to inner panels; aggressive collapse makes
     # those surfaces intersect. Preserve its authored silhouette at close range.
     if model == 'porsche-911-gt3' and o.get('role') == 'paint': rr = 1
+    # the open cockpit and the livery shell are what you look at on the single-seater
+    if model == 'mclaren-mp45' and o.get('role') in ('livery', 'interior', 'glass'): rr = 1
+    # parts already decimated per cabin region, and the steering wheel, keep their detail
+    if o.get('pre') or o.get('steer'): rr = 1
     if rr < .98:
         simplify(o, rr)
     o['lod'] = 0
@@ -223,5 +320,7 @@ meta = dict(model=model, wheelbase=wb_target, trackF=trackF, trackR=trackR, whee
 props = bpy.ops.export_scene.gltf.get_rna_type().properties
 formats = [e.identifier for e in props['export_format'].enum_items]
 if formats: assert 'GLB' in formats  # Some Blender builds expose this as a dynamic enum.
-bpy.ops.export_scene.gltf(filepath=str(output/'car.glb'), export_format='GLB', export_extras=True, export_animations=False, export_skins=False, export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6, export_draco_position_quantization=14, export_draco_normal_quantization=10, export_draco_texcoord_quantization=12)
+# The single-seater's sixteen PNG texture maps would be ~36 MB, so it ships them as WebP.
+images = dict(export_image_format='WEBP', export_image_quality=88) if model == 'mclaren-mp45' else {}
+bpy.ops.export_scene.gltf(filepath=str(output/'car.glb'), export_format='GLB', export_extras=True, export_animations=False, export_skins=False, export_draco_mesh_compression_enable=True, export_draco_mesh_compression_level=6, export_draco_position_quantization=14, export_draco_normal_quantization=10, export_draco_texcoord_quantization=12, **images)
 print('PREPARED',json.dumps(meta), 'bytes', (output/'car.glb').stat().st_size)

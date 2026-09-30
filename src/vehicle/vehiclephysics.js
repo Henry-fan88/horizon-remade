@@ -358,7 +358,8 @@ export class VehiclePhysics {
     const A = this.assists;
     const steerLevel = A.steering === 'full' ? 2 : A.steering === 'normal' ? 1 : 0;
     // a steering ratio that tightens with speed (pads / keys); raw mode keeps more lock
-    const maxSteer = 0.6 / Math.pow(1 + Math.max(0, Math.abs(vf) - 3) / 11, steerLevel === 0 ? 0.64 : 0.72);
+    // (single-seaters have less lock and far quicker responses: steerScale trims it)
+    const maxSteer = (0.6 * (s.steerScale ?? 1)) / Math.pow(1 + Math.max(0, Math.abs(vf) - 3) / 11, steerLevel === 0 ? 0.64 : 0.72);
     let target = inp.steer * maxSteer + this.damagePull;
     const latV = this.vel.dot(_left);
     const beta = Math.abs(vf) > 2 ? Math.atan2(latV, Math.abs(vf)) : 0; // body slip (+ = sliding left)
@@ -414,7 +415,8 @@ export class VehiclePhysics {
     if (A.stability && vf > 5 && this.grounded >= 2) {
       const vch = 24; // characteristic speed of a mildly understeering car
       let rDes = (-vf * Math.tan(this.steerAngle)) / s.style.WB / (1 + (vf / vch) * (vf / vch));
-      const rMax = (0.95 * s.grip * G) / vf;
+      // the most the tyres can turn the car, including what the wings press down at speed
+      const rMax = (0.95 * s.grip * (G + (0.5 * RHO * s.ClA * vf * vf) / this.mass)) / vf;
       rDes = clamp(rDes, -rMax, rMax);
       const yawRate = this.angVel.dot(_up);
       const err = yawRate - rDes;
@@ -433,9 +435,11 @@ export class VehiclePhysics {
     const wheelRpm = (Math.abs(drivenSpeed) / rWheel) * (60 / (Math.PI * 2));
     let rpmFromWheels = wheelRpm * Math.abs(ratio) * fd;
     const idle = s.idle;
-    // clutch slip at low speed lets the engine rev
-    const launchRpm = s.electric ? 0 : Math.min(s.redline * 0.55, idle + 3500);
-    let rpmTarget = Math.max(rpmFromWheels, idle + throttle * (this.gear !== 0 && Math.abs(vf) < 8 ? launchRpm - idle : 0) * clamp(1 - Math.abs(vf) / 8, 0, 1));
+    // clutch slip at low speed lets the engine rev; a race car (spec.launchRpm) holds its
+    // launch revs on the clutch until the wheels catch up instead of bogging down
+    const launchRpm = s.electric ? 0 : s.launchRpm ?? Math.min(s.redline * 0.55, idle + 3500);
+    const launch = s.launchRpm && this.gear > 0 ? throttle * (launchRpm - idle) : throttle * (this.gear !== 0 && Math.abs(vf) < 8 ? launchRpm - idle : 0) * clamp(1 - Math.abs(vf) / 8, 0, 1);
+    let rpmTarget = Math.max(rpmFromWheels, idle + launch);
     if (this.gear === 0 || this.shiftTimer > 0) rpmTarget = Math.max(idle, this.rpm * 0.985 + throttle * 60);
     this.rpm += (rpmTarget - this.rpm) * (1 - Math.exp(-dt * 14));
     // rev limiter
@@ -482,6 +486,7 @@ export class VehiclePhysics {
     if (!nWheelsDriven) nWheelsDriven = drivenCount;
     let grounded = 0;
     let offroad = 0;
+    let rumble = 0;
     const frontShare = s.drive === 'AWD' ? s.split ?? 0.4 : s.drive === 'FWD' ? 1 : 0;
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i];
@@ -531,6 +536,7 @@ export class VehiclePhysics {
       }
       const surf = SURFACE_INFO[w.surface] || SURFACE_INFO[0];
       if (surf.offroad) offroad++;
+      if (surf.rumble) rumble++;
       // --- suspension
       const cv = (w.compression - w.prevCompression) / dt;
       let Fs = w.k * Math.min(w.compression, w.rest) + (cv > 0 ? w.cBump : w.cReb) * cv;
@@ -662,6 +668,8 @@ export class VehiclePhysics {
     this.aid.abs = absWork;
     this.aid.tcs = tcWork;
     this.offroadFactor = grounded ? offroad / grounded : this.offroadFactor;
+    // share of the tyres drumming over circuit kerbs (camera shake + rumble sound)
+    this.kerbFactor = grounded ? rumble / 4 : 0;
     this.onRoad = this.offroadFactor < 0.5;
 
     // ---------------- aerodynamics

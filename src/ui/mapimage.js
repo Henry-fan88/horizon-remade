@@ -1,6 +1,7 @@
 // Renders top-down map images of the island from world data (for minimap + world map).
 import { WORLD } from '../config.js';
 import { SURF } from '../world/worldgen.js';
+import { cityLayout } from '../world/districts.js';
 
 export function renderMapImages(world, size = 1024) {
   const data = world.data;
@@ -58,6 +59,16 @@ export function renderMapImages(world, size = 1024) {
   gs.putImageData(is, 0, 0);
   gd.putImageData(id, 0, 0);
   const toPx = (v) => ((v + WORLD.size / 2) / WORLD.size) * size;
+  // The downtown footprint is visible on the map and minimap, between the streets.
+  for (const b of cityLayout(world.network, world.hf)) {
+    gs.fillStyle = b.height > 80 ? '#798d97' : '#a4a49a';
+    gd.fillStyle = '#66716f';
+    for (const ctx of [gs, gd]) {
+      ctx.save(); ctx.translate(toPx(b.x),toPx(b.z)); ctx.rotate(-(b.yaw||0));
+      const w=b.w/WORLD.size*size,d=b.d/WORLD.size*size;
+      ctx.fillRect(-w/2,-d/2,w,d); ctx.restore();
+    }
+  }
   // roads
   const drawRoads = (g, widthMul, color, outline) => {
     g.lineCap = 'round';
@@ -80,8 +91,8 @@ export function renderMapImages(world, size = 1024) {
       }
     }
   };
-  drawRoads(gs, 1.6, (r) => (r.kind === 'dirt' ? '#caa77a' : r.kind === 'highway' ? '#ffe7a8' : '#f4f1ea'), 'rgba(40,30,20,0.55)');
-  drawRoads(gd, 1.5, (r) => (r.kind === 'dirt' ? 'rgba(200,180,150,0.75)' : r.kind === 'highway' ? '#ffffff' : 'rgba(235,235,240,0.92)'), 'rgba(0,0,0,0.5)');
+  drawRoads(gs, 1.6, (r) => (r.kind === 'dirt' ? '#caa77a' : r.kind === 'highway' ? '#ffe7a8' : r.kind === 'track' ? '#ff5a7a' : '#f4f1ea'), 'rgba(40,30,20,0.55)');
+  drawRoads(gd, 1.5, (r) => (r.kind === 'dirt' ? 'rgba(200,180,150,0.75)' : r.kind === 'highway' ? '#ffffff' : r.kind === 'track' ? '#ff6f8c' : 'rgba(235,235,240,0.92)'), 'rgba(0,0,0,0.5)');
   return { sat, dark, size, toPx };
 }
 

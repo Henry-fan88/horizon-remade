@@ -50,9 +50,17 @@ async function boot() {
       if (m) msg.textContent = m;
     });
     fill.style.width = '100%';
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has('capture')) {
+      const { installCapture } = await import('./dev/capture.js');
+      installCapture(game);
+    }
     if (import.meta.env.DEV && new URLSearchParams(location.search).has('environment')) {
       const { inspectEnvironment } = await import('./dev/environment-inspector.js');
       inspectEnvironment(game);
+    }
+    if (import.meta.env.DEV && new URLSearchParams(location.search).has('traffic')) {
+      const { inspectTraffic } = await import('./dev/traffic-inspector.js');
+      inspectTraffic(game);
     }
     loading.classList.add('hidden');
     setTimeout(() => loading.remove(), 1200);

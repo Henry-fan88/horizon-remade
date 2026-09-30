@@ -1,33 +1,41 @@
 // Renders a top-down debug image of the generated world: node tools/mapdebug.mjs
 import { generateWorld } from '../src/world/worldgen.js';
+import { WORLD } from '../src/config.js';
 import { writeFileSync } from 'node:fs';
 import zlib from 'node:zlib';
 
 const w = generateWorld({}, (p, msg) => {});
 console.log('gen ms', w.genTime.toFixed(0), 'roads', w.roads.length, Object.fromEntries(Object.entries(w.veg).map(([k, v]) => [k, v.length / 5])));
-const S = 1025, OUT = 1024;
+const S = WORLD.res + 1, OUT = Number(process.env.OUT || 1536), HALF = WORLD.size / 2;
+// CROP="x0,z0,x1,z1" renders just that square (world metres) with 20 m contour lines
+const CROP = process.env.CROP ? process.env.CROP.split(',').map(Number) : [-HALF, -HALF, HALF, HALF];
+const MPP = (CROP[2] - CROP[0]) / OUT; // metres per pixel
+const CELLM = WORLD.size / WORLD.res;
+const at = (x, z) => Math.min(S - 1, Math.max(0, Math.round((z + HALF) / CELLM))) * S + Math.min(S - 1, Math.max(0, Math.round((x + HALF) / CELLM)));
 const img = Buffer.alloc(OUT * OUT * 3);
 for (let y = 0; y < OUT; y++) for (let x = 0; x < OUT; x++) {
-  const i = y * S + x;
+  const wx = CROP[0] + x * MPP, wz = CROP[1] + y * MPP;
+  const i = at(wx, wz);
   const h = w.heights[i];
   let r = w.colors[i * 4], g = w.colors[i * 4 + 1], b = w.colors[i * 4 + 2];
   // hillshade
-  const hl = w.heights[i + (x < 1023 ? 1 : 0)] - h, hd = w.heights[i + (y < 1023 ? S : 0)] - h;
+  const hl = w.heights[at(wx + CELLM, wz)] - h, hd = w.heights[at(wx, wz + CELLM)] - h;
   const shade = Math.max(0.35, Math.min(1.3, 1 - (hl * 0.8 + hd * 0.5) * 0.08));
   r *= shade; g *= shade; b *= shade;
+  if (process.env.CROP && h > 0 && Math.floor(h / 20) !== Math.floor(w.heights[at(wx + MPP, wz)] / 20)) { r *= 0.6; g *= 0.6; b *= 0.6; }
   if (h < 0) { const t = Math.min(1, -h / 6); r = r * (1 - t) * 0.5 + 20 * t; g = g * (1 - t) * 0.6 + 90 * t + 40; b = b * (1 - t) * 0.6 + 140 * t + 60; }
   const o = (y * OUT + x) * 3;
   img[o] = Math.min(255, r); img[o + 1] = Math.min(255, g); img[o + 2] = Math.min(255, b);
 }
 const plot = (x, z, c, rad = 1) => {
-  const px = Math.round((x + 2048) / 4), py = Math.round((z + 2048) / 4);
+  const px = Math.round((x - CROP[0]) / MPP), py = Math.round((z - CROP[1]) / MPP);
   for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
     const X = px + dx, Y = py + dy; if (X < 0 || Y < 0 || X >= OUT || Y >= OUT) continue;
     const o = (Y * OUT + X) * 3; img[o] = c[0]; img[o + 1] = c[1]; img[o + 2] = c[2];
   }
 };
 for (const k of ['broadleaf', 'pine', 'palm', 'birch']) { const v = w.veg[k]; for (let i = 0; i < v.length; i += 5) plot(v[i], v[i + 2], k === 'pine' ? [20, 60, 30] : k === 'palm' ? [60, 110, 40] : [30, 80, 25], 0); }
-const cols = { road: [255, 255, 255], highway: [255, 220, 60], dirt: [200, 140, 80], street: [220, 220, 255], runway: [60, 60, 60] };
+const cols = { road: [255, 255, 255], highway: [255, 220, 60], dirt: [200, 140, 80], street: [220, 220, 255], runway: [60, 60, 60], track: [255, 40, 40] };
 for (const r of w.roads) { const p = r.pts; for (let i = 0; i < p.length; i += 3) plot(p[i], p[i + 2], cols[r.kind], r.kind === 'highway' ? 1 : 0); }
 const P = w.props;
 for (let i = 0; i < P.turbines.length; i += 3) plot(P.turbines[i], P.turbines[i + 2], [255, 0, 255], 3);

@@ -12,7 +12,11 @@
 import { SimplexNoise, mulberry32, smoothstep, saturate, lerp, clamp, MinHeap, hash2 } from '../core/math.js';
 import { HeightField } from './heightfield.js';
 import { computeBank, crossOffset } from './roadprofile.js';
+import { REGION, ISLANDS, CAUSEWAYS, PASS, CIRCUIT_TRACK, PADDOCK, CANYON_LOOP, regionHeight, causewayHeight, toWorld } from './regions.js';
+import { polyDistance } from './regions.js';
 import { WORLD } from '../config.js';
+import { CITY, CITY_STREETS, CITY_PARKS, cityMask, cityTerrainHeight, forestMask, duneMask, mudMask, landmarkPlots } from './districts.js';
+import { RoadNetwork } from './roadnet.js';
 
 export const SURF = {
   GRASS: 0,
@@ -27,13 +31,20 @@ export const SURF = {
   DIRTROAD: 9,
   PAVE: 10,
   VERGE: 11,
+  SNOW: 12,
+  GRAVEL: 13, // circuit gravel traps
+  MUD: 15, // saturated soil in the lakeside wetland
+  KERB: 14, // circuit kerbs (reported by the road query, never painted)
 };
+
+export { REGION };
 
 export const LOCATIONS = {
   festival: { x: 250, z: 1110, r: 105, blend: 70 },
-  town: { x: 1000, z: 170, r: 175, blend: 70 },
+  town: { x: CITY.x, z: CITY.z, r: 365, blend: 75 },
   lake: { x: -520, z: 560, r: 185 },
   airfield: { x: 800, z: 700, len: 860, w: 64, angle: -0.35 },
+  paddock: { x: 0, z: 0, angle: 0, len: 0, w: 0, h: 0 }, // set by generateWorld (Autódromo)
 };
 
 const RES = WORLD.res;
@@ -42,7 +53,8 @@ const HALF = SIZE / 2;
 const CELL = SIZE / RES;
 const S = RES + 1;
 
-let nA, nB, nC, nD;
+let nA, nB, nC, nD, nE;
+const regionTmp = { region: 0, rho: 9 };
 
 function islandRadius(x, z) {
   const ang = Math.atan2(z, x);
@@ -123,10 +135,26 @@ function baseHeight(x, z, out) {
   if (d > 1.0) beach -= 260 * (d - 1.0) * (d - 1.0);
   h = lerp(h, beach, f);
   if (h < -45) h = -45;
+  // the outer islands and the causeways that reach them
+  let region = REGION.MAIN,
+    coastRho = d;
+  const rh = regionHeight(x, z, nE, regionTmp);
+  if (rh > h) {
+    h = rh;
+    region = regionTmp.region;
+    coastRho = regionTmp.rho;
+  }
+  const ch = causewayHeight(x, z);
+  if (ch > h) {
+    h = ch;
+    region = REGION.MAIN;
+    coastRho = 1.05;
+  }
   if (out) {
-    out.d = d;
-    out.volc = volc;
-    out.mMask = mMask;
+    out.d = coastRho;
+    out.volc = region === REGION.MAIN ? volc : 0;
+    out.mMask = region === REGION.MAIN ? mMask : 0;
+    out.region = region;
   }
   return h;
 }
@@ -134,8 +162,8 @@ function baseHeight(x, z, out) {
 // ---------------------------------------------------------------------------
 // Road routing
 
-const G = 256; // A* grid resolution
-const GC = SIZE / G; // 16 m
+const GC = 16; // A* grid cell (m)
+const G = SIZE / GC; // A* grid resolution
 const DIRS = [
   [1, 0],
   [0, 1],
@@ -474,7 +502,7 @@ const VCURVE = {
   'Airfield Road': [400, 260],
   'Airfield East': [400, 260],
 };
-const VCURVE_KIND = { highway: [1400, 800], road: [450, 300], street: [260, 160], runway: [2000, 2000], dirt: [160, 100] };
+const VCURVE_KIND = { highway: [1400, 800], road: [450, 300], street: [260, 160], runway: [2000, 2000], dirt: [160, 100], track: [900, 600] };
 
 // Uniform grid of finished road segments for nearest-surface queries during grading.
 class SegmentGrid {
@@ -883,6 +911,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   nB = new SimplexNoise(mulberry32(seed + 23));
   nC = new SimplexNoise(mulberry32(seed + 37));
   nD = new SimplexNoise(mulberry32(seed + 51));
+  nE = new SimplexNoise(mulberry32(seed + 77));
   const rand = mulberry32(seed + 99);
 
   const t0 = performance.now();
@@ -890,7 +919,8 @@ export function generateWorld(opts = {}, progress = () => {}) {
   const coastD = new Float32Array(S * S);
   const volcH = new Float32Array(S * S);
   const mountain = new Float32Array(S * S);
-  const tmp = { d: 0, volc: 0, mMask: 0 };
+  const regionMap = new Uint8Array(S * S);
+  const tmp = { d: 0, volc: 0, mMask: 0, region: 0 };
   for (let iz = 0; iz < S; iz++) {
     const z = iz * CELL - HALF;
     for (let ix = 0; ix < S; ix++) {
@@ -900,14 +930,20 @@ export function generateWorld(opts = {}, progress = () => {}) {
       coastD[i] = tmp.d;
       volcH[i] = tmp.volc;
       mountain[i] = tmp.mMask;
+      regionMap[i] = tmp.region;
     }
     if ((iz & 63) === 0) progress(0.05 + 0.25 * (iz / S), 'Shaping the island');
   }
 
-  // Flat pads (festival, town)
+  // Preserve the bay coastline while replacing the old flat city pad with hills.
+  for (let iz=0; iz<S; iz++) for (let ix=0; ix<S; ix++) {
+    const x=ix*CELL-HALF,z=iz*CELL-HALF,i=iz*S+ix;
+    const blend=cityMask(x,z)*smoothstep(1,5,base[i]);
+    if(blend>0) base[i]=lerp(base[i],cityTerrainHeight(x,z),blend);
+  }
+  // The festival remains a flat event site.
   const pads = [
     { ...LOCATIONS.festival, h: null, min: 5 },
-    { ...LOCATIONS.town, h: null, min: 6 },
   ];
   const baseHF = new HeightField(base, RES, SIZE);
   for (const p of pads) {
@@ -929,6 +965,17 @@ export function generateWorld(opts = {}, progress = () => {}) {
     const hc = Math.max(8, baseHF.height(AF.x, AF.z));
     AF.h = hc;
     flattenRect(base, AF.x, AF.z, AF.len / 2, AF.w / 2, AF.angle, 60, hc);
+  }
+  // Autódromo paddock: a paved rectangle beside the main straight
+  const CI = ISLANDS.circuit;
+  const PD = LOCATIONS.paddock;
+  {
+    [PD.x, PD.z] = toWorld(CI, PADDOCK.u, PADDOCK.v);
+    PD.angle = CI.angle;
+    PD.len = PADDOCK.len;
+    PD.w = PADDOCK.w;
+    PD.h = Math.max(6, baseHF.height(PD.x, PD.z));
+    flattenRect(base, PD.x, PD.z, PD.len / 2, PD.w / 2, PD.angle, 40, PD.h);
   }
   progress(0.32, 'Surveying roads');
 
@@ -1099,20 +1146,42 @@ export function generateWorld(opts = {}, progress = () => {}) {
     const onRing = nearestOn(ringPts, east[0] + 120, east[1] + 60).p;
     routed('Airfield East', 'road', 9, [east, onRing], { maxGrade: 0.1 });
   }
-  // 10. Town grid
-  {
-    const streets = [
-      [[T.x - 150, T.z - 110], [T.x + 150, T.z - 110]],
-      [[T.x - 150, T.z + 110], [T.x + 150, T.z + 110]],
-      [[T.x - 110, T.z - 150], [T.x - 110, T.z + 150]],
-      [[T.x + 110, T.z - 150], [T.x + 110, T.z + 150]],
-    ];
-    let k = 0;
-    for (const st of streets) {
-      let p = resample(st, 2, false);
-      roadDefs.push({ name: ['Calle Norte', 'Calle Sur', 'Avenida Oeste', 'Avenida Este'][k++], kind: 'street', width: 10, closed: false, pts2: p });
-    }
+  // 11. Causeways to the outer islands, starting on the Costa Ring
+  for (const cw of CAUSEWAYS) {
+    const a = nearestOn(ringPts, cw.a[0], cw.a[1]).p.slice();
+    const p = resample([a, cw.b], 2, false);
+    roadDefs.push({ name: cw.name, kind: 'road', width: 11, closed: false, pts2: p, maxGrade: 0.05 });
+    markOcc(p);
   }
+  // 12. Outer-island roads from authored layouts
+  const fixedRoad = (name, kind, width, pts, closed, opt = {}) => {
+    let p = catmull(pts, closed, 4);
+    p = resample(p, 2, closed);
+    p = laplacian(p, opt.smooth ?? 10, 0.5, closed);
+    p = resample(p, 2, closed);
+    if (!closed) p = enforceMinRadius(p, opt.minR ?? 20);
+    markOcc(p);
+    roadDefs.push({ name, kind, width, closed, pts2: p, maxGrade: opt.maxGrade, surface: opt.surface });
+    return p;
+  };
+  fixedRoad('Paso Nevado', 'road', 9, PASS, false, { minR: 16, smooth: 4, maxGrade: 0.12 });
+  fixedRoad('Autódromo Horizonte', 'track', 13, CIRCUIT_TRACK.map(([u, v]) => toWorld(CI, u, v)), true, { smooth: 8, maxGrade: 0.06 });
+  fixedRoad('Paddock Road', 'road', 10, [toWorld(CI, 0, 560), toWorld(CI, 0, 505), toWorld(CI, -10, 440)], false, { minR: 20 });
+  fixedRoad('Cañón Rojo Rally', 'dirt', 8, CANYON_LOOP, true, { smooth: 8, maxGrade: 0.16 });
+  // San Francisco-inspired streets: diagonal avenues, offset neighborhood blocks,
+  // hill switchbacks and a curved waterfront. Grade each junction with its neighbors.
+  for (const street of CITY_STREETS) {
+    const pts2 = fixedRoad(street.name, 'street', street.width, street.points, false,
+      { smooth: 2, minR: street.name === 'Lombard Street' ? 9 : 16, maxGrade: .16 });
+    roadDefs[roadDefs.length-1].city = true;
+  }
+  // The wetland trail connects back to Granja Road at both ends, clear of the lake.
+  const farmRoad = roadDefs.find(r => r.name === 'Granja Road').pts2;
+  const marshEntry = nearestOn(farmRoad, -710, 790).p.slice();
+  const marshExit = nearestOn(farmRoad, -850, 280).p.slice();
+  fixedRoad('Marisma Trail', 'dirt', 7, [marshEntry, [-820, 735], [-900, 610], [-825, 510], [-810, 385], marshExit], false, { smooth: 12, maxGrade: .1, surface: SURF.MUD });
+  const canyonRoad = roadDefs.find(r => r.name === 'Cañón Rojo Rally').pts2;
+  fixedRoad('Dunas Trail', 'dirt', 8, [nearestOn(canyonRoad, -2200, 640).p.slice(), [-2290, 740], [-2400, 840], [-2520, 805], nearestOn(canyonRoad, -2650, 610).p.slice()], false, { smooth: 16, maxGrade: .13 });
   progress(0.45, 'Grading roads');
 
   // ------------------------------------------------------ height profiles
@@ -1129,7 +1198,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
     const hw = rd.width / 2;
     let h = new Float32Array(n);
     for (let i = 0; i < n; i++) h[i] = baseHF.height(p[i][0], p[i][1]);
-    const sigma = rd.kind === 'highway' ? 22 : rd.kind === 'street' || rd.kind === 'runway' ? 4 : rd.kind === 'dirt' ? 10 : 14;
+    const sigma = rd.kind === 'highway' || rd.kind === 'track' ? 22 : rd.kind === 'street' || rd.kind === 'runway' ? 4 : rd.kind === 'dirt' ? 10 : 14;
     const g = rd.maxGrade ?? (rd.kind === 'highway' ? 0.06 : rd.kind === 'dirt' ? 0.16 : 0.1);
     // junction samples are fixed to the earlier road's surface while the rest is smoothed
     // and grade-limited around them, so the approach is spread over as much road as needed
@@ -1161,9 +1230,32 @@ export function generateWorld(opts = {}, progress = () => {}) {
       crown[i] *= 1 - 0.7 * jz[i];
     }
     junctionCross(bank, crown, junction);
-    const road = { id: ri, name: rd.name, kind: rd.kind, width: rd.width, closed: rd.closed, pts, bank, crown };
+    const road = { id: ri, name: rd.name, kind: rd.kind, width: rd.width, closed: rd.closed, pts, bank, crown, surface: rd.surface, city: !!rd.city };
     roads.push(road);
     segGrid.addRoad(road);
+  }
+  // Dense multi-way hillside junctions must share one elevation field. Sequential
+  // pinning to several differently graded neighbors can produce conflicting targets.
+  // Sample the same smooth urban terrain for streets and their island approaches;
+  // blend back into existing road profiles outside the city, before carving terrain.
+  const urbanHeight=(x,z)=>{
+    const dx=x-AF.x,dz=z-AF.z,c=Math.cos(AF.angle),s=Math.sin(AF.angle);
+    const airfield=(1-smoothstep(AF.len/2-5,AF.len/2+100,Math.abs(dx*c+dz*s)))
+      *(1-smoothstep(AF.w/2,AF.w/2+120,Math.abs(-dx*s+dz*c)));
+    return lerp(cityTerrainHeight(x,z),AF.h,airfield);
+  };
+  for (const road of roads) {
+    const p=road.pts,n=p.length/3;
+    for(let i=0;i<n;i++){
+      const x=p[i*3],z=p[i*3+2],radius=Math.hypot((x-1030)/580,(z-175)/420);
+      const blend=road.city?1:1-smoothstep(1.08,1.45,radius);
+      if(blend<=0)continue;
+      p[i*3+1]=lerp(p[i*3+1],Math.max(2.2,urbanHeight(x,z)),blend);
+      const a=Math.max(0,i-1),b=Math.min(n-1,i+1),dx=p[b*3]-p[a*3],dz=p[b*3+2]-p[a*3+2],length=Math.hypot(dx,dz)||1;
+      const nx=-dz/length,nz=dx/length;
+      const cross=(urbanHeight(x+nx*2,z+nz*2)-urbanHeight(x-nx*2,z-nz*2))/4;
+      road.bank[i]=lerp(road.bank[i],cross,blend);road.crown[i]*=1-blend;
+    }
   }
   // danger-sign jumps: kickers on the dirt trails (part of the road profile, so the drawn
   // ribbon, the physics surface and the carved terrain all include them) and in open fields
@@ -1172,6 +1264,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
     { road: 'Costa Dirt', frac: 0.5, side: 0, name: 'Costa Danger Sign', H: 2.4 },
     { road: 'Via Central', frac: 0.3, side: 34, name: 'Granja Danger Sign', H: 3.2 },
     { road: 'Autopista Isla', frac: 0.62, side: -40, name: 'Llanura Danger Sign', H: 3.4 },
+    { road: 'Cañón Rojo Rally', frac: 0.45, side: 0, name: 'Cañón Danger Sign', H: 2.8 },
   ];
   const jumps = [];
   const fieldJumps = [];
@@ -1206,6 +1299,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   const best2 = new Float32Array(S * S).fill(1e9);
   const best2h = new Float32Array(S * S);
   const roadW = new Float32Array(S * S); // half width of nearest road
+  const best1lat = new Float32Array(S * S); // signed lateral offset from it (+ = right of travel)
   const MAXR = 70;
   for (const rd of roads) {
     const pts = rd.pts;
@@ -1273,6 +1367,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
             best1r[v] = rd.id;
             best1s[v] = s;
             roadW[v] = hw;
+            best1lat[v] = lat;
           } else if (d < best2[v]) {
             const same = best1r[v] === rd.id && Math.abs(s - best1s[v]) < 60;
             if (!same) {
@@ -1285,18 +1380,21 @@ export function generateWorld(opts = {}, progress = () => {}) {
     }
   }
   const FLAT = 6.2; // flat shoulder beyond the edge
-  const weight = (d, dh) => {
-    const bw = clamp(10 + 1.6 * Math.abs(dh), 10, 60);
-    return 1 - smoothstep(FLAT, FLAT + bw, d);
+  // On mountainsides the cut and fill slopes are steep (about 1:1, like a real mountain
+  // road) instead of spreading wide benches across the whole face between switchbacks.
+  const weight = (d, dh, steep) => {
+    const bw = steep ? clamp(3 + 0.9 * Math.abs(dh), 3, 32) : clamp(10 + 1.6 * Math.abs(dh), 10, 60);
+    return 1 - smoothstep(steep ? 3 : FLAT, (steep ? 3 : FLAT) + bw, d);
   };
   for (let v = 0; v < S * S; v++) {
     if (best1r[v] < 0) continue;
     let h = heights[v];
+    const steep = regionMap[v] === REGION.ALPINE;
     if (best2[v] < 1e8) {
-      const w2 = weight(best2[v], h - best2h[v]);
+      const w2 = weight(best2[v], h - best2h[v], steep);
       h = lerp(h, best2h[v], w2);
     }
-    const w1 = weight(best1[v], h - best1h[v]);
+    const w1 = weight(best1[v], h - best1h[v], steep);
     h = lerp(h, best1h[v], w1);
     heights[v] = h;
   }
@@ -1326,6 +1424,62 @@ export function generateWorld(opts = {}, progress = () => {}) {
     pave: [150, 146, 140],
     seabed: [196, 178, 140],
   };
+  // outer islands
+  const A = {
+    meadow: [100, 128, 56],
+    meadow2: [126, 142, 66],
+    alpForest: [50, 72, 38],
+    granite: [128, 126, 122],
+    graniteDark: [88, 88, 88],
+    scree: [150, 146, 138],
+    snow: [236, 240, 247],
+    pebbles: [150, 146, 136],
+  };
+  const K = {
+    dryGrass: [172, 160, 98],
+    dryGrass2: [150, 146, 88],
+    turf: [92, 128, 50],
+    turf2: [108, 142, 58],
+    gravel: [196, 184, 158],
+    sand: [226, 212, 176],
+  };
+  const R = {
+    sand: [206, 140, 90],
+    sand2: [184, 116, 72],
+    dune: [222, 170, 118],
+    mesa: [176, 116, 78],
+    scrub: [150, 118, 72],
+    strata: [
+      [170, 78, 50],
+      [198, 110, 64],
+      [216, 160, 110],
+      [142, 62, 44],
+      [188, 96, 58],
+    ],
+    beach: [214, 164, 120],
+  };
+  const pineBeltAt = (x, z, h) => saturate(nC.fbm(x / 420 + 7, z / 420, 3) * 0.9 + 0.35) * (1 - smoothstep(180, 260, h));
+  // signed curvature of each road (rad per metre, + turning right), for circuit run-offs
+  const curvOf = new Map();
+  const roadCurv = (rd) => {
+    if (curvOf.has(rd.id)) return curvOf.get(rd.id);
+    const pts = rd.pts,
+      n = pts.length / 3,
+      k = new Float32Array(n);
+    const at = (i) => (rd.closed ? ((i % n) + n) % n : clamp(i, 0, n - 1));
+    for (let i = 0; i < n; i++) {
+      const a = at(i - 8),
+        b = at(i),
+        c = at(i + 8);
+      const ax = pts[b * 3] - pts[a * 3],
+        az = pts[b * 3 + 2] - pts[a * 3 + 2];
+      const bx = pts[c * 3] - pts[b * 3],
+        bz = pts[c * 3 + 2] - pts[b * 3 + 2];
+      k[i] = (ax * bz - az * bx) / (Math.hypot(ax, az) * Math.hypot(bx, bz) || 1) / 16;
+    }
+    curvOf.set(rd.id, k);
+    return k;
+  };
   const fieldCols = [
     [206, 184, 92],
     [104, 146, 52],
@@ -1351,13 +1505,14 @@ export function generateWorld(opts = {}, progress = () => {}) {
   const fieldMaskAt = (x, z) => {
     // countryside south-west / south-central, not forest, not steep
     const m1 = smoothstep(1250, 900, Math.hypot(x + 200, z - 650) * 1.0);
-    return m1 * smoothstep(0.15, -0.25, nB.noise2(x / 520 + 9, z / 520 - 4));
+    const farmland = 1 - smoothstep(.6, 1.1, Math.hypot((x + 300) / 750, (z - 935) / 285));
+    return Math.max(m1 * smoothstep(0.15, -0.25, nB.noise2(x / 520 + 9, z / 520 - 4)), farmland * .96);
   };
   const forestAt = (x, z) => {
     let f = nC.fbm(x / 650 - 3, z / 650 + 8, 3) * 0.9 + 0.1;
     f += smoothstep(-400, -1100, x) * 0.55; // western jungle
     f -= smoothstep(300, 1100, x) * 0.55; // dry east
-    return saturate(f);
+    return saturate(Math.max(f, forestMask(x, z) * (.9 + .1 * nB.noise2(x / 95, z / 95))));
   };
   const dryAt = (x, z) => saturate(smoothstep(250, 1150, x + 160 * nA.noise2(x / 500, z / 500)) - smoothstep(-500, -1100, z) * 0.6);
 
@@ -1376,6 +1531,44 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const d = coastD[i];
       let surf = SURF.GRASS;
       let grassDensity = 1;
+      const region = regionMap[i];
+      let rockCol = null,
+        sandCol = P.sand;
+      if (region === REGION.ALPINE) {
+        // meadows, pine forest lower down, granite and snow above ~300 m
+        mix3(A.meadow, A.meadow2, saturate(0.5 + 0.5 * n2));
+        const pineBelt = pineBeltAt(x, z, h);
+        if (pineBelt > 0.45) {
+          blendTo(A.alpForest, smoothstep(0.45, 0.75, pineBelt) * 0.75);
+          if (pineBelt > 0.6) surf = SURF.FOREST;
+        }
+        blendTo(A.scree, smoothstep(200, 320, h + n1 * 30) * 0.45);
+        grassDensity = 1 - smoothstep(220, 330, h);
+        rockCol = h > 200 ? A.graniteDark : A.granite;
+        sandCol = A.pebbles;
+      } else if (region === REGION.CIRCUIT) {
+        mix3(K.dryGrass, K.dryGrass2, saturate(0.5 + 0.5 * n2));
+        surf = SURF.DRY;
+        grassDensity = 0.55;
+        sandCol = K.sand;
+      } else if (region === REGION.CANYON) {
+        // red desert: dunes and washes on the flats, dusty scrub on the mesa
+        mix3(R.sand, R.sand2, saturate(0.5 + 0.5 * n2));
+        blendTo(R.dune, smoothstep(0.2, 0.7, n1) * smoothstep(40, 10, h) * 0.6);
+        if (h > 80) blendTo(R.mesa, 0.7);
+        blendTo(R.scrub, smoothstep(0.3, 0.8, nA.noise2(x / 60, z / 60)) * 0.35);
+        surf = h < 30 ? SURF.SAND : SURF.DRY;
+        const dunes = duneMask(x, z);
+        blendTo([224 + n1 * 9, 187 + n2 * 9, 124 + n1 * 5], dunes);
+        if (dunes > .4) surf = SURF.SAND;
+        grassDensity = .12 * (1 - dunes);
+        // layered rock in the cliffs: bands by height
+        rockCol = R.strata[((Math.floor((h + n1 * 2) / 7) % 5) + 5) % 5];
+        sandCol = R.beach;
+      }
+      if (region !== REGION.MAIN) {
+        // (shared steps below: steep rock, beaches, roads, pads)
+      } else {
 
       // base grass tone
       mix3(P.grass, P.grass2, saturate(0.5 + 0.5 * n2));
@@ -1416,7 +1609,6 @@ export function generateWorld(opts = {}, progress = () => {}) {
         }
       }
       // mountains -> rocky grass
-      const mm = mountain[i];
       if (h > 70) blendTo(P.grassDark, smoothstep(70, 200, h) * 0.3 * (1 - forest));
       // volcano
       const vh = volcH[i];
@@ -1428,17 +1620,44 @@ export function generateWorld(opts = {}, progress = () => {}) {
           grassDensity *= 1 - vt;
         }
       }
+      }
+      const mm = mountain[i],
+        vh = volcH[i];
       // steep -> rock
-      const rockT = smoothstep(0.24 + n1 * 0.05, 0.42, slope);
+      const rockT = smoothstep((region === REGION.CANYON ? 0.18 : 0.24) + n1 * 0.05, 0.42, slope);
       if (rockT > 0) {
-        blendTo(mm > 0.3 || vh > 60 ? P.rockDark : P.rock, rockT);
+        blendTo(rockCol || (mm > 0.3 || vh > 60 ? P.rockDark : P.rock), rockT);
         grassDensity *= 1 - rockT;
         if (rockT > 0.5) surf = SURF.ROCK;
       }
+      // snow on the alpine tops (steep faces stay dark rock)
+      if (region === REGION.ALPINE) {
+        const snowT = smoothstep(130, 185, h + n1 * 12 + n2 * 12) * (1 - smoothstep(0.5, 0.72, slope));
+        if (snowT > 0) {
+          blendTo(A.snow, snowT);
+          grassDensity *= 1 - snowT;
+          if (snowT > 0.5) surf = SURF.SNOW;
+        }
+      }
+      // causeways: rock armour (rip-rap) down to the water on both sides
+      let causeway = false;
+      if (h < 3.2 && region === REGION.MAIN && d > 1) {
+        let cw = 1e9;
+        for (const c of CAUSEWAYS) cw = Math.min(cw, polyDistance([c.a, c.b], x, z).d);
+        if (cw < 42) {
+          causeway = true;
+          const rr = smoothstep(9, 12, cw) * (1 - smoothstep(34, 42, cw));
+          blendTo(n1 > 0 ? P.rock : P.rockDark, rr);
+          if (rr > 0.5) {
+            surf = SURF.ROCK;
+            grassDensity = 0;
+          }
+        }
+      }
       // beaches
-      if (h < 4.2 && d > 0.8) {
+      if (h < 4.2 && d > 0.8 && !causeway) {
         const st = smoothstep(4.2, 2.4, h + n1 * 0.6);
-        blendTo(P.sand, st);
+        blendTo(sandCol, st);
         if (h < 0.6) blendTo(P.wetSand, smoothstep(0.6, -0.3, h));
         if (st > 0.5) {
           surf = SURF.SAND;
@@ -1449,14 +1668,52 @@ export function generateWorld(opts = {}, progress = () => {}) {
         blendTo(P.seabed, smoothstep(0, -3, h));
         grassDensity = 0;
       }
-      // lake shores -> muddy
+      // Saturated lakeside soil, with irregular grassy edges and clear road approaches.
+      const wetland = region === REGION.MAIN && h > .3 ? mudMask(x, z) * (.86 + n2 * .14) : 0;
+      if (wetland > .02) {
+        blendTo([84 + n1 * 9, 66 + n1 * 6, 45 + n1 * 5], wetland);
+        grassDensity *= 1 - wetland * .98;
+        if (wetland > .42) surf = SURF.MUD;
+      }
       // roads / verges
       const rd = best1[i];
-      if (best1r[i] >= 0 && rd < FLAT + 2) {
+      const onTrack = best1r[i] >= 0 && roads[best1r[i]].kind === 'track';
+      if (onTrack && rd >= 0.5 && rd < 36) {
+        // circuit surrounds: mown turf, gravel traps on the outside of the corners
+        const road = roads[best1r[i]];
+        const kc = roadCurv(road)[Math.min(road.pts.length / 3 - 1, Math.round(best1s[i] / 2))];
+        const outside = kc * best1lat[i] < 0;
+        const corner = smoothstep(1 / 300, 1 / 120, Math.abs(kc));
+        const trap = outside ? corner * smoothstep(2.5, 4.5, rd) * (1 - smoothstep(24, 29, rd)) : 0;
+        const turf = 1 - smoothstep(28, 36, rd);
+        blendTo(n2 > 0 ? K.turf : K.turf2, turf * 0.9);
+        // mown short: no tall clumps right beside the track limits
+        grassDensity = smoothstep(3.5, 6, rd) * 0.25;
+        surf = SURF.GRASS;
+        if (trap > 0.35) {
+          blendTo(K.gravel, trap);
+          surf = SURF.GRAVEL;
+          grassDensity = 0;
+        }
+      }
+      // paddock
+      {
+        const ax = x - PD.x,
+          az = z - PD.z;
+        const u = ax * Math.cos(PD.angle) + az * Math.sin(PD.angle);
+        const w = -ax * Math.sin(PD.angle) + az * Math.cos(PD.angle);
+        if (Math.abs(u) < PD.len / 2 + 6 && Math.abs(w) < PD.w / 2 + 6) {
+          const pt = (1 - smoothstep(PD.len / 2 - 4, PD.len / 2 + 6, Math.abs(u))) * (1 - smoothstep(PD.w / 2 - 4, PD.w / 2 + 6, Math.abs(w)));
+          blendTo(P.pave, pt * 0.9);
+          grassDensity *= 1 - pt;
+          if (pt > 0.5) surf = SURF.PAVE;
+        }
+      }
+      if (best1r[i] >= 0 && rd < FLAT + 2 && !(onTrack && rd >= 0.5)) {
         const rk = roads[best1r[i]].kind;
         if (rd < 0.5) {
-          surf = rk === 'dirt' ? SURF.DIRTROAD : SURF.ROAD;
-          blendTo(rk === 'dirt' ? P.dirt : P.verge, 0.9);
+          surf = roads[best1r[i]].surface ?? (rk === 'dirt' ? SURF.DIRTROAD : SURF.ROAD);
+          blendTo(surf === SURF.MUD ? [82, 62, 42] : rk === 'dirt' ? P.dirt : P.verge, 0.9);
           grassDensity = 0;
         } else {
           const vt = 1 - smoothstep(0.5, FLAT + 2, rd);
@@ -1464,6 +1721,12 @@ export function generateWorld(opts = {}, progress = () => {}) {
           grassDensity *= 1 - vt;
           if (rd < 2.5) surf = rk === 'street' ? SURF.PAVE : SURF.VERGE;
         }
+      }
+      // Urban ground follows neighborhood extents; parks retain planted ground.
+      const cm=cityMask(x,z);
+      if (cm>.1 && h>2 && !CITY_PARKS.some(p=>Math.hypot(x-p.x,z-p.z)<p.r)) {
+        blendTo(P.pave,cm*.88); grassDensity*=1-cm;
+        if(cm>.5 && surf!==SURF.ROAD) surf=SURF.PAVE;
       }
       // pads
       for (const p of pads) {
@@ -1501,7 +1764,8 @@ export function generateWorld(opts = {}, progress = () => {}) {
 
   // ------------------------------------------------------------ vegetation
   progress(0.82, 'Planting forests');
-  const veg = { broadleaf: [], pine: [], palm: [], bush: [], cactus: [], rock: [], birch: [] };
+  const veg = { broadleaf: [], pine: [], pineSnow: [], palm: [], bush: [], cactus: [], rock: [], birch: [] };
+  const settlements = landmarkPlots(new RoadNetwork(roads), hf);
   const roadDist = (x, z) => {
     const ix = clamp(Math.round((x + HALF) / CELL), 0, RES),
       iz = clamp(Math.round((z + HALF) / CELL), 0, RES);
@@ -1509,13 +1773,17 @@ export function generateWorld(opts = {}, progress = () => {}) {
     return best1r[v] >= 0 ? best1[v] : 1e9;
   };
   const inPad = (x, z, m = 0) => {
+    if(cityMask(x,z)>.12) return true;
     for (const p of pads) if (Math.hypot(x - p.x, z - p.z) < p.r + m) return true;
     for (const j of jumps) if (Math.hypot(x - j.lip.x, z - j.lip.z) < 45 + m || Math.hypot(x - j.x, z - j.z) < 30 + m) return true;
-    const ax = x - AF.x,
-      az = z - AF.z;
-    const u = ax * Math.cos(AF.angle) + az * Math.sin(AF.angle);
-    const w = -ax * Math.sin(AF.angle) + az * Math.cos(AF.angle);
-    return Math.abs(u) < AF.len / 2 + m + 10 && Math.abs(w) < AF.w / 2 + m + 10;
+    for (const R of [AF, PD]) {
+      const ax = x - R.x,
+        az = z - R.z;
+      const u = ax * Math.cos(R.angle) + az * Math.sin(R.angle);
+      const w = -ax * Math.sin(R.angle) + az * Math.cos(R.angle);
+      if (Math.abs(u) < R.len / 2 + m + 10 && Math.abs(w) < R.w / 2 + m + 10) return true;
+    }
+    return false;
   };
   const STEP = 11;
   for (let gz = -HALF + STEP; gz < HALF - STEP; gz += STEP) {
@@ -1530,6 +1798,8 @@ export function generateWorld(opts = {}, progress = () => {}) {
       if (h < 1.2) continue;
       const rdist = roadDist(x, z);
       if (inPad(x, z, 4)) continue;
+      if (settlements.farms.some(p => Math.abs(x - p.x + 7) < 56 && Math.abs(z - p.z) < 25)) continue;
+      if (settlements.chalets.some(p => Math.abs(x - p.x) < 14 && Math.abs(z - p.z) < 13)) continue;
       hf.smoothNormal(x, z, nrm);
       const ix = clamp(Math.round((x + HALF) / CELL), 0, RES),
         iz = clamp(Math.round((z + HALF) / CELL), 0, RES);
@@ -1540,6 +1810,43 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const vh = volcH[i];
       const surf = surface[i];
       const rot = r3 * Math.PI * 2;
+      const reg = regionMap[i];
+      if (reg !== REGION.MAIN) {
+        const nearTrack = best1r[i] >= 0 && roads[best1r[i]].kind === 'track';
+        if (reg === REGION.ALPINE) {
+          if (surf === SURF.SNOW) {
+            if (rdist > 7 && nrm.y > .8 && h < 310 && r4 < .52 * (1 - smoothstep(260, 325, h)))
+              veg.pineSnow.push(x, h, z, .85 + r1 * .75, rot);
+            continue;
+          }
+          if (rdist > 6 && (surf === SURF.ROCK || h > 230) && r4 < 0.14) {
+            veg.rock.push(x, h, z, 0.9 + r1 * 2.4, rot);
+            continue;
+          }
+          if (rdist < 7.5 || nrm.y < 0.78) continue;
+          const belt = pineBeltAt(x, z, h);
+          if (r4 < belt * 0.95) veg.pine.push(x, h, z, 0.75 + r1 * 0.75, rot);
+          else if (h < 110 && r4 < belt + 0.06) veg.birch.push(x, h, z, 0.8 + r1 * 0.4, rot);
+          else if (r4 < belt + 0.1) veg.bush.push(x, h, z, 0.6 + r2 * 0.5, rot);
+        } else if (reg === REGION.CIRCUIT) {
+          if (rdist < (nearTrack ? 44 : 9) || nrm.y < 0.85) continue;
+          if (d > 0.9 && h < 8) {
+            if (r4 < 0.12) veg.palm.push(x, h, z, 0.8 + r1 * 0.4, rot);
+          } else if (r4 < 0.045) veg.broadleaf.push(x, h, z, 0.7 + r1 * 0.45, rot);
+          else if (r4 < 0.1) veg.bush.push(x, h, z, 0.6 + r2 * 0.5, rot);
+        } else {
+          // fallen blocks gather at the foot of the cliffs, not on the faces
+          if (rdist > 5 && surf === SURF.ROCK && nrm.y > 0.6 && r4 < 0.25) {
+            veg.rock.push(x, h, z, 0.8 + r1 * 2.2, rot);
+            continue;
+          }
+          if (rdist < 6 || nrm.y < 0.82) continue;
+          if (r4 < 0.035) veg.cactus.push(x, h, z, 0.8 + r1 * 0.8, rot);
+          else if (r4 < 0.085) veg.bush.push(x, h, z, 0.5 + r2 * 0.5, rot);
+          else if (r4 < 0.09 && h < 12) veg.palm.push(x, h, z, 0.9 + r1 * 0.3, rot);
+        }
+        continue;
+      }
 
       // rocks / boulders anywhere rugged
       if (rdist > 6 && (surf === SURF.ROCK || surf === SURF.ASH || (h > 80 && r4 < 0.06)) && r4 < 0.16) {
@@ -1549,6 +1856,11 @@ export function generateWorld(opts = {}, progress = () => {}) {
       if (rdist < 7.5) continue;
       if (nrm.y < 0.8) continue;
       if (vh > 110) continue;
+      if (surf === SURF.MUD) {
+        if (r4 < .1) veg.birch.push(x, h, z, .9 + r1 * .6, rot);
+        else if (r4 < .24) veg.bush.push(x, h, z, .7 + r2 * .7, rot);
+        continue;
+      }
       if (surf === SURF.FIELD) {
         continue;
       }
@@ -1571,9 +1883,9 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const density = smoothstep(0.22, 0.8, forest) * 0.92 + 0.05 + (pineZone > 0.5 ? 0.12 : 0);
       if (r4 < density) {
         if (pineZone > 0.5) veg.pine.push(x, h, z, 0.75 + r1 * 0.6, rot);
-        else if (x < -500 && r2 < 0.35) veg.palm.push(x, h, z, 0.9 + r1 * 0.4, rot);
+        else if (x < -500 && forestMask(x, z) < .4 && r2 < 0.35) veg.palm.push(x, h, z, 0.9 + r1 * 0.4, rot);
         else if (r2 < 0.18) veg.birch.push(x, h, z, 0.8 + r1 * 0.4, rot);
-        else veg.broadleaf.push(x, h, z, 0.75 + r1 * 0.55, rot);
+        else veg.broadleaf.push(x, h, z, .9 + r1 * .7 + forestMask(x, z) * .35, rot);
         // a second tree in dense forest
         if (forest > 0.75 && r2 > 0.5) {
           const x2 = x + (r3 - 0.5) * 6,
@@ -1613,7 +1925,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   progress(0.9, 'Placing landmarks');
 
   // ------------------------------------------------------------ props
-  const props = placeProps(roads, hf, heights, base, best1, best1r, pads, coastD, rand);
+  const props = placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD, rand);
   progress(0.97, 'Finishing');
 
   return {
@@ -1626,6 +1938,8 @@ export function generateWorld(opts = {}, progress = () => {}) {
     pads: pads.map((p) => ({ x: p.x, z: p.z, r: p.r, h: p.h })),
     jumps,
     airfield: { ...AF },
+    paddock: { ...PD },
+    regionMap,
     genTime: performance.now() - t0,
   };
 }
@@ -1689,8 +2003,9 @@ function flattenRect(arr, cx, cz, hl, hw, ang, blend, h) {
 // ----------------------------------------------------------------------------
 // Road-side props: lamps, guard rails, chevrons, fences, wind turbines, boards
 
-function placeProps(roads, hf, heights, base, best1, best1r, pads, coastD, rand) {
+function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD, rand) {
   const lamps = [];
+  const posts = []; // [x,y,z,rotY] roadside delineator posts
   const rails = []; // [x1,y1,z1,x2,y2,z2]
   const chevrons = []; // [x,y,z,rotY]
   const fences = [];
@@ -1743,7 +2058,8 @@ function placeProps(roads, hf, heights, base, best1, best1r, pads, coastD, rand)
       }
     }
     // guard rails where the drop beside the road is big; chevrons on tight bends
-    if (rd.kind !== 'street') {
+    // (the race circuit gets its own tyre walls and barriers in props.js)
+    if (rd.kind !== 'street' && rd.kind !== 'track') {
       for (const sd of [1, -1]) {
         let run = null;
         for (let i = 2; i < n - 2; i += 2) {
@@ -1767,6 +2083,36 @@ function placeProps(roads, hf, heights, base, best1, best1r, pads, coastD, rand)
           }
         }
         if (run && run.length > 2) for (let k = 0; k < run.length - 1; k++) rails.push(...run[k], ...run[k + 1]);
+      }
+      // white delineator posts just off the verge on country roads and highways, every
+      // 50 m and closer through bends (none beside guard rails, at junctions, on bridges)
+      if (rd.kind === 'road' || rd.kind === 'highway') {
+        if (rd.name !== 'Festival Drive' && rd.name !== 'Paddock Road') {
+          for (let i = 6; i < n - 6; ) {
+            const bend = Math.abs(curv[i]) > 1 / 160;
+            const [tx, tz] = tangent(i);
+            for (const sd of [1, -1]) {
+              const nx = -tz * sd,
+                nz = tx * sd;
+              const x = p[i * 3] + nx * (hw + 1.5),
+                z = p[i * 3 + 2] + nz * (hw + 1.5);
+              const y = hf.height(x, z);
+              if (y < WORLD.seaLevel + 0.4 || Math.abs(y - p[i * 3 + 1]) > 1.1) continue;
+              const drop = p[i * 3 + 1] - hf.height(p[i * 3] + nx * (hw + 14), p[i * 3 + 2] + nz * (hw + 14));
+              const tight = Math.abs(curv[i]) > 1 / 70 && Math.sign(curv[i]) === -sd;
+              if (drop > 5.5 || (tight && drop > 2)) continue; // a guard rail stands here
+              const ix = clamp(Math.round((x + HALF) / CELL), 0, RES),
+                iz = clamp(Math.round((z + HALF) / CELL), 0, RES);
+              const v = iz * S + ix;
+              if (best1r[v] !== rd.id || best2[v] < 7) continue; // junction or another road
+              let inPad = cityMask(x,z)>.12;
+              for (const pd of pads) if (Math.hypot(x - pd.x, z - pd.z) < pd.r + 15) inPad = true;
+              if (inPad) continue;
+              posts.push(x, y, z, Math.atan2(tx, tz));
+            }
+            i += bend ? 12 : 25;
+          }
+        }
       }
       // chevrons on the outside of tight bends
       for (let i = 10; i < n - 10; i += 9) {
@@ -1794,7 +2140,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, pads, coastD, rand)
             nz = tx * sd;
           const x = x0 + nx * (hw + 3.2),
             z = z0 + nz * (hw + 3.2);
-          let inPad = false;
+          let inPad = cityMask(x,z)>.12;
           for (const pd of pads) if (Math.hypot(x - pd.x, z - pd.z) < pd.r + 12) inPad = true;
           if (inPad) continue;
           const y = hf.height(x, z);
@@ -1869,6 +2215,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, pads, coastD, rand)
 
   return {
     lamps: new Float32Array(lamps),
+    posts: new Float32Array(posts),
     rails: new Float32Array(rails),
     chevrons: new Float32Array(chevrons),
     fences: new Float32Array(fences),

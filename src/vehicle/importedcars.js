@@ -5,6 +5,8 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { IMPORTED_CARS } from './modelcatalog.js';
+import { buildClassicCabin, installInsideShading } from './cockpit.js';
+import { buildFormulaSteering } from './formulasteering.js';
 
 const sources = new Map();
 let loading;
@@ -38,6 +40,9 @@ function prepare(scene, id) {
   scene.updateMatrixWorld(true);
   const mounts = ['body', ...wheelNames].map(name => scene.getObjectByName(name));
   if (mounts.some(o => !o)) throw new Error(`${id}: missing body or four wheel assemblies`);
+  // optional: the driver's steering wheel, prepared as its own mount (+Z = column axis)
+  const steeringMount = scene.getObjectByName('steering');
+  if (steeringMount) mounts.push(steeringMount);
   const templates = new Map();
   const groups = mounts.map((mount, mountIndex) => {
     const inverse = mount.matrixWorld.clone().invert();
@@ -77,7 +82,8 @@ function prepare(scene, id) {
     });
     return [...buckets.values()].map(part => ({ ...part, geometry: merge(part.geometry) }));
   });
-  return { groups, templates };
+  const steering = steeringMount ? { matrix: steeringMount.matrixWorld.clone(), parts: groups.pop() } : null;
+  return { groups, templates, steering };
 }
 
 export function preloadImportedCars() {
@@ -118,15 +124,33 @@ function atlasPaint(paintMat, template) {
   for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) paintMat[key] = template[key];
   // The classic's atlas includes chrome, badges and lamps. Recolour only its dark
   // painted areas; preserve coloured badges, bright chrome and the original UVs.
+  // Instanced traffic passes its per-car colour through the same mask.
   paintMat.onBeforeCompile = shader => {
     shader.fragmentShader = shader.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
       #ifdef USE_MAP
         float originalValue = max(sampledDiffuseColor.r, max(sampledDiffuseColor.g, sampledDiffuseColor.b));
         float paintMask = 1.0 - smoothstep(0.008, 0.025, originalValue);
-        diffuseColor.rgb = mix(sampledDiffuseColor.rgb, diffuse * (0.82 + originalValue * 5.0), paintMask);
+        vec3 paintTint = diffuse;
+        #ifdef USE_INSTANCING_COLOR
+          paintTint *= vColor.rgb;
+        #endif
+        diffuseColor.rgb = mix(sampledDiffuseColor.rgb, paintTint * (0.82 + originalValue * 5.0), paintMask);
+      #endif`).replace('#include <color_fragment>', `#ifndef USE_INSTANCING_COLOR
+        #include <color_fragment>
       #endif`);
   };
-  paintMat.customProgramCacheKey = () => 'classic-atlas-paint-v1';
+  paintMat.customProgramCacheKey = () => 'classic-atlas-paint-v2';
+}
+
+// Single-seater liveries are painted into their texture: the car's paint material takes the
+// livery maps (so it keeps the clear coat and live reflections) and is not recoloured.
+function liveryPaint(paintMat, template) {
+  for (const key of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'aoMap']) paintMat[key] = template[key];
+  paintMat.color.set(0xffffff);
+  paintMat.metalness = template.metalness;
+  paintMat.roughness = template.roughness;
+  if (template.normalScale) paintMat.normalScale.copy(template.normalScale);
+  paintMat.userData.livery = true;
 }
 
 export function buildImportedCar(style, paint, paintMat) {
@@ -144,11 +168,27 @@ export function buildImportedCar(style, paint, paintMat) {
     ['glass', new THREE.MeshPhysicalMaterial({ color: 0x647c88, metalness: .05, roughness: .075, transparent: true, opacity: .38, depthWrite: false, clearcoat: 1 })],
     ['lens', new THREE.MeshPhysicalMaterial({ color: 0xd4e0e5, roughness: .07, transparent: true, opacity: .16, depthWrite: false, clearcoat: 1 })],
   ]);
-  if (asset.templates.has('paint-atlas')) atlasPaint(paintMat, asset.templates.get('paint-atlas'));
+  const liveryKey = [...asset.templates.keys()].find((key) => key.endsWith(':livery'));
+  const preparePaint = (material) => {
+    if (asset.templates.has('paint-atlas')) atlasPaint(material, asset.templates.get('paint-atlas'));
+    if (liveryKey) liveryPaint(material, asset.templates.get(liveryKey));
+    return material;
+  };
+  preparePaint(paintMat);
+  if (liveryKey) materials.set(liveryKey, paintMat);
+  // in-car view: the painted shell shows dark trim on its inside, the glass turns clear
+  installInsideShading(paintMat);
+  paintMat.userData.cabinRole = 'shell';
   for (const [key, template] of asset.templates) if (!materials.has(key)) {
     const material = template.clone();
     if (key === 'glass-atlas') { material.roughness = .14; material.metalness = .35; }
     materials.set(key, material);
+  }
+  materials.get('glass').userData.cabinRole = 'glass';
+  if (materials.has('glass-atlas')) materials.get('glass-atlas').userData.cabinRole = 'glass';
+  for (const [key, material] of materials) if (/^texture:.*:Blackout_MTL$/.test(key)) {
+    installInsideShading(material);
+    material.userData.cabinRole = 'shell';
   }
   const lights = { head: [], tail: [], brake: [], reverse: [], headMat, tailMat, revMat };
   const levels = [[], [], []];
@@ -162,6 +202,29 @@ export function buildImportedCar(style, paint, paintMat) {
     return mesh;
   };
   const bodyMeshes = asset.groups[0].map(part => meshFor(part, group));
+  // The steering wheel turns about its mount's +Z axis (see Vehicle.syncVisual).
+  let steeringWheel = null;
+  if (asset.steering) {
+    const mount = new THREE.Group();
+    mount.name = 'steering';
+    mount.applyMatrix4(asset.steering.matrix);
+    steeringWheel = new THREE.Group();
+    mount.add(steeringWheel);
+    group.add(mount);
+    asset.steering.parts.forEach(part => meshFor(part, steeringWheel));
+  }
+  // the classic's model has no cabin: build one (shown only from the driver's seat)
+  let cabin = null;
+  if (!steeringWheel && style.visualAsset === 'mustang-fastback') {
+    cabin = buildClassicCabin(style);
+    group.add(cabin.group);
+    steeringWheel = cabin.steeringWheel;
+  }
+  if (!steeringWheel && style.openWheel && style.cockpit?.formulaWheel) {
+    cabin = buildFormulaSteering(style);
+    group.add(cabin.group);
+    steeringWheel = cabin.steeringWheel;
+  }
   const wheels = asset.groups.slice(1).map((parts, i) => {
     const front = i < 2, side = i%2 === 0 ? 1 : -1;
     const r = front ? style.wheelR : style.wheelRr ?? style.wheelR;
@@ -185,7 +248,7 @@ export function buildImportedCar(style, paint, paintMat) {
         add(new THREE.CircleGeometry(.073, 24), 'head', side*.725, .6983, 2.020);
         add(new THREE.CircleGeometry(.029, 20).rotateY(Math.PI), 'reverse', side*.613, .412, -2.331);
         for (let i=-1;i<=1;i++) add(new THREE.PlaneGeometry(.044,.118).rotateY(Math.PI).rotateX(.3), 'tail', side*.5715+i*.081, .649, -2.342);
-      } else {
+      } else if (!style.openWheel) {
         // Seat the small reverse lens on the real rear bumper rather than at its
         // bounding-box corner, which leaves it floating on a curved body.
         const surfaces = bodyMeshes.filter(mesh => mesh.visible && !mesh.material.transparent);
@@ -203,8 +266,9 @@ export function buildImportedCar(style, paint, paintMat) {
         }
       }
     }
-    // Use the actual exterior silhouette with cheap tyres for contact shadows.
-    const shadowParts = asset.groups[0].filter(part => part.level === 2 && /^(paint|glass)/.test(part.materialKey)).map(part => part.geometry);
+    // Use the actual exterior silhouette with cheap tyres for contact shadows. Glass is
+    // left out so sunlight reaches the cabin through the windows (in-car camera).
+    const shadowParts = asset.groups[0].filter(part => part.level === 2 && (/^paint/.test(part.materialKey) || part.materialKey.endsWith(':livery'))).map(part => part.geometry);
     for (const wheel of wheels) shadowParts.push(new THREE.CylinderGeometry(wheel.r,wheel.r,wheel.w,12).rotateZ(Math.PI/2).translate(wheel.x,wheel.r,wheel.z));
     const shadow = merge(shadowParts.map(shape => {
       const geometry = new THREE.BufferGeometry();
@@ -223,7 +287,8 @@ export function buildImportedCar(style, paint, paintMat) {
   const shadow = new THREE.Mesh(asset.extras.shadow, shadowMat); shadow.castShadow = true; group.add(shadow);
   let disposed = false, currentLevel = 0;
   return {
-    group, body: bodyMeshes.find(mesh => mesh.material === paintMat), merged: bodyMeshes, paintMat, wheels, lights,
+    group, body: bodyMeshes.find(mesh => mesh.material === paintMat), merged: bodyMeshes, paintMat, wheels, lights, preparePaint, steeringWheel,
+    updateCockpit: cabin ? cabin.update : null,
     zF: style.WB/2+style.fo, zR: -style.WB/2-style.ro,
     setLodDistance(distance) {
       const level = distance < 38 ? 0 : distance < 145 ? 1 : 2;
@@ -235,6 +300,7 @@ export function buildImportedCar(style, paint, paintMat) {
       if (disposed) return;
       disposed = true;
       for (const material of new Set(materials.values())) if (material !== paintMat) material.dispose();
+      cabin?.dispose();
     },
   };
 }

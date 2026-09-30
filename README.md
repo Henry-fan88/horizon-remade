@@ -5,11 +5,10 @@ It has a volcanic island, a road network, a festival hub, skill chains, races ag
 PR stunts, traffic, Wheelspins, a garage, and **online multiplayer** where drivers share the world
 and can race each other.
 
-The island, roads, trees, buildings, most cars, engine sounds and radio are generated
-in code. Ground and road materials combine locally bundled **CC0 photographic textures**
+The islands, roads, trees, buildings, engine sounds and radio are generated in code. Ground and road materials combine locally bundled **CC0 photographic textures**
 with procedural detail; see [surface attribution](public/environment/surfaces/ATTRIBUTION.md).
-Four cars use detailed, attributed real-car models: **Ferrari 458 Italia**, **Ford Mustang Shelby GT500**, **Porsche 911 GT3**, and **1967 Ford Mustang Fastback**. The Ferrari is by **vicent091036**,
-and all four assets are licensed under **CC BY 4.0**, with locally bundled assets, automotive materials, and animated
+Seven cars use detailed, attributed real-car models: **Ferrari 458 Italia**, **Ford Mustang Shelby GT500**, **Porsche 911 GT3**, **1967 Ford Mustang Fastback**, plus the 2023 **McLaren MCL60**, **Ferrari SF23**, and **Red Bull RB19** Formula 1 cars. The Ferrari 458 is by **vicent091036** and the three modern F1 models are by **Redgrund**,
+and all seven assets are licensed under **CC BY 4.0**, with locally bundled assets, automotive materials, and animated
 wheels. See [model credits](public/models/credits.html). Other car makes, places
 and music are fictional; no Forza game assets or logos are used.
 
@@ -81,9 +80,31 @@ On phones and tablets, touch controls appear automatically.
 
 ## Features
 
-- **Island open world:** 16 km² with a volcano and crater plume, beaches, a lake, jungle, farm
-  fields, a dry east, a pastel town, an airfield and a lighthouse. Roads are routed with A*
+- **Open world (6 × 6 km):** three outer islands reached by causeways — *Sierra Nevada*
+  (snowy peaks, six-hairpin Paso Nevado), the *Autódromo Horizonte* circuit (kerbs, gravel
+  traps, tyre walls, grandstands, pit building, start lights) and *Cañón Rojo* (red-rock
+  canyon rally loop). Five new races: Autódromo Grand Prix, Paso Nevado Hillclimb and
+  Descent, Cañón Rojo Rally and the Tres Islas Grand Tour.
+- **Main island:** 16 km² with a volcano and crater plume, beaches, a lake, jungle, farm
+  fields, a dry east, a San Francisco-inspired city, an airfield and a lighthouse. Roads are routed with A*
   pathfinding and carved into the terrain, including a spiral road up the volcano.
+- **Six environments to explore:** the San Francisco-inspired city has 347 rotated building lots,
+  including Victorian hillside houses, Chinatown shops, North Beach storefronts, downtown towers,
+  SoMa mixed-use blocks and an open Embarcadero promenade. Eighteen streets follow different neighborhood
+  alignments, with diagonal Market/Columbus avenues, Lombard bends and real hills. Landmark
+  interpretations include a pyramid tower, rounded downtown tower, Coit-style lookout, Ferry
+  Building and a red suspension bridge on the eastern causeway. This is a compact playable
+  adaptation, not a surveyed street-for-street reconstruction.
+  The city includes 193 shops, cafe seating, produce displays, lanterns, crossings, benches,
+  parking meters, street trees, hydrants, 168 parked civilian vehicles, 240 animated pedestrians,
+  and a 44-car moving civilian traffic pool. Pedestrians follow sidewalks split at intersections;
+  parking and buildings are checked against the driving lanes. The **Traffic & pedestrians**
+  setting controls moving traffic and pedestrians; parked vehicles remain part of the scenery. Neighborhoods can be selected directly from the map.
+  Dunas Doradas adds golden dunes and a connected desert trail; Bosque Verde has dense mixed
+  woodland; Valle de las Granjas has patchwork crops, barns, farmhouses and silos; Sierra Nevada
+  has snowy pines, chalets and snowbanks along the pass; Marisma del Lago has a connected mud
+  trail, wet soil, puddles, reeds and reduced tyre grip. Open **M → Explore the island** to
+  select an environment, set a route or fast travel there.
 - **Visuals:** a physically based sky with clouds, stars and moon, a dynamic day/night cycle,
   height-based aerial-perspective fog, sun shadows, bloom, ACES tone mapping, colour grading, speed
   blur, water with depth-tinted shallows and shoreline foam, instanced forests with wind sway,
@@ -91,8 +112,11 @@ On phones and tablets, touch controls appear automatically.
 - **Driving:** 120 Hz rigid-body physics with raycast suspension, slip-based tyres, weight
   transfer, turbo lag, an automatic or manual gearbox, handbrake drifts, and aero drag and
   downforce. Assists: steering/counter-steer, traction control and ABS.
-- **Thirteen cars**, including four detailed real-car models and nine
-  procedural cars, with performance index classes (D → X), stats, paint, finish and rim colours.
+- **Seven real cars**, all licensed models (Ferrari 458, Shelby GT500, Porsche 911 GT3, '67
+  Mustang Fastback, and the 2023 McLaren MCL60, Ferrari SF23 and Red Bull RB19 with synthesized V6 turbo sound), with performance
+  index classes, stats, paint, finish and rim colours (the F1 cars keep their original liveries).
+  AI racers use these garage models; single-seaters race other single-seaters, and ambient traffic uses its own civilian fleet. Press **C** to reach the **Cockpit** camera: the
+  steering wheel turns, the Fastback has a built '67 cabin with working gauges.
   The 458 uses the existing GT driving setup: handling, suspension, collision dimensions and
   progression are unchanged. Its displayed performance figures describe the game's tuning.
 - **Horizon-style gameplay:** skill chains (drift, air, speed, near miss, wrecker, drafting,
@@ -100,13 +124,20 @@ On phones and tablets, touch controls appear automatically.
   Drivatar-style AI, checkpoints and a colour-coded driving line. PR stunts (speed traps, speed
   zones, drift zones, danger-sign jumps) keep star ratings and records. There are 30 bonus boards,
   smashable fences, signs and bushes, ambient traffic, and rewind.
+- **Everyday road traffic:** eight dedicated civilian models (compact, hatchback, sedan, estate,
+  minivan, pickup, SUV and utility 4×4) with varied paint, independent crash specifications,
+  and three instanced distance levels. These are separate from the player garage and race AI.
+  Preview the fleet at `/tools/traffic-preview.html` on the development server.
 - **Progression:** credits, XP, levels, Wheelspins, an Autoshow and a garage, saved in
   localStorage.
 - **Online:** automatic session matchmaking (16 players per session), interpolated remote cars with
   nametags and engine sounds, chat, and **Horizon Open** online races. The host starts a lobby,
   others press J to join, and everyone gets a synchronized countdown.
-- **Audio:** a synthesized engine for each car type (V8, V12, flat-six, boxer, turbo whistle,
-  blow-off valve, exhaust pops, EV whine), tyres, wind and impacts, plus **Horizon Pulse**, a
+- **Audio:** an AudioWorklet engine synthesizer (`src/core/engine-worklet.js`) that fires each
+  cylinder in its real firing order through modelled headers, pipe and muffler resonances:
+  flat-plane V8 (458), supercharged cross-plane V8 (GT500), flat-six (GT3), loping 289 V8
+  (Fastback), with intake roar, overrun crackle, dual-clutch upshift "brap" and a muffled
+  in-cabin mix. `node tools/enginebench.mjs` renders WAVs and spectrograms. Tyres, wind, impacts, plus **Horizon Pulse**, a
   procedural festival radio station.
 
 ## Project layout
@@ -115,8 +146,8 @@ On phones and tablets, touch controls appear automatically.
 server/            Node server: static hosting + WebSocket multiplayer (multiplayer.js)
 src/config.js      Game title, world constants, default settings (rename the game here)
 src/world/         World generation (worker), terrain, roads, sky/atmosphere, water, vegetation, props
-src/vehicle/       Car specs, procedural car models, physics, effects
-public/models/     Four attributed car models, LODs and credits (served locally)
+src/vehicle/       Car specs, real-car model adapters, cockpit, physics, effects
+public/models/     Five attributed car models, LODs and credits (served locally)
 public/draco/      Local Draco decoder and its license
 public/environment/ CC0 photographed terrain and road materials, sources and checksums
 src/game/          Game loop/state, camera, skills, events, races, AI, traffic, stunts, rewind, GPS
@@ -125,26 +156,38 @@ src/net/           Multiplayer client
 ```
 
 URL flags that help during development: `?play` skips the title screen, `?fps` shows the frame
-rate, `?car=supercar` picks a car, `?touch` forces touch controls, and `?server=wss://…` sets the
+rate, `?car=gt3` picks a car (`gt`, `shelby`, `gt3`, `fastback`), `?touch` forces touch controls, and `?server=wss://…` sets the
 multiplayer server.
 
 ## Customising
 
 - **Rename the game:** edit `GAME_TITLE`, `GAME_SUBTITLE` and `FESTIVAL_NAME` in `src/config.js`
   (and the `<title>` / loading logo in `index.html`).
-- **Cars:** add or tweak entries in `src/vehicle/carspecs.js`. Body shapes are side-profile and
-  plan curves in `STYLES`; physics comes from power, mass, grip, top speed and drivetrain.
-  `STYLES.gt.visualAsset` selects the 458 visual adapter in `src/vehicle/realcar.js`. The original
-  procedural GT remains available as a fallback if the GLB cannot load. Do not edit the chassis
-  dimensions to fit an asset: those dimensions also control the physics.
+- **Cars:** add or tweak entries in `src/vehicle/carspecs.js`. Each car's `STYLES` entry holds the
+  model's measured dimensions (they also drive the physics), its cockpit eye point and steering
+  ratio, and the hood/bumper camera points; physics comes from power, mass, grip, top speed and
+  drivetrain. `realcar.js` adapts the Ferrari; `importedcars.js` the prepared Sketchfab models
+  (see `tools/car-assets/`). If a model cannot load, a plain stand-in keeps the car drivable.
   While the dev server is running, open `/tools/car-preview.html` for the same car model in a
   studio with camera, paint, wheel and lamp controls plus integration checks.
-- **World:** the island is generated from `WORLD.seed` in `src/config.js`. `node tools/mapdebug.mjs`
-  renders a top-down preview image of the generated island and prints road statistics.
+- **Engine sounds:** profiles in `src/core/engine-profiles.js` (firing order, pipe length,
+  resonances, intake, crackle). `node tools/enginebench.mjs` renders each one to WAV plus a
+  spectrogram in `/tmp/enginebench`.
+- **World:** the islands are generated from `WORLD.seed` in `src/config.js`; the outer islands,
+  causeways and authored road layouts (pass, circuit, canyon loop) live in `src/world/regions.js`
+  and the circuit's barriers, stands and buildings in `src/world/circuit-props.js`.
+  `node tools/mapdebug.mjs` renders a top-down preview image and prints road statistics
+  (`CROP="x0,z0,x1,z1"` renders one area with contour lines).
   The local PBR materials are documented in `public/environment/surfaces/ATTRIBUTION.md`.
   They preload alongside the car and world generation, with procedural fallbacks if unavailable.
-  In development, open `/?environment&car=gt` to inspect the actual festival, town, countryside,
-  coast and highlands, orbit each scene, and compare daylight/golden hour/night. **Drive here**
+  District definitions and shared building lots live in `src/world/districts.js`; their instanced
+  architecture and landmarks are in `src/world/city-props.js` and `src/world/district-props.js`;
+  animated pedestrians and parked cars live in `src/game/citylife.js`. `node --test tools/environment.test.mjs`
+  checks road connections, rotated building clearance, sidewalk/parking placement, smooth hillside
+  junctions, the rebuilt street race, biome coverage, mud grip and driving from all six environments.
+  In development, open `/?environment&view=City` to inspect the actual city, desert, forest,
+  rural area, snow and mud (plus the existing festival, coast and highlands), orbit each scene,
+  and compare daylight/golden hour/night. **Drive here**
   returns to the game. The inspector is excluded from production builds.
 
 ## A note on the name
@@ -161,6 +204,6 @@ Node.js 20.19+ within the 20.x series, or Node.js 22.12+; this matches the bundl
 
 ### Real-car expansion
 
-The Shelby GT500, 911 GT3 and 1967 Mustang Fastback are added to **My Cars** once for both new and existing saves. Existing cars, paint, credits and records are preserved. You can also test them with `?car=shelby`, `?car=gt3` and `?car=fastback`. The model studio at `/tools/car-preview.html` has a car selector, steering, wheel rotation, paint and lamp controls.
+The Shelby GT500, 911 GT3 and 1967 Mustang Fastback are added to **My Cars** once. The modern McLaren MCL60 replaces the classic MP4/5 under the existing `f1` save ID. The Ferrari SF23 and Red Bull RB19 are granted once through the modern F1 pack. Existing selection, paint, credits and records are preserved. Test with `?car=shelby`, `?car=gt3`, `?car=fastback`, `?car=f1`, `?car=sf23` or `?car=rb19`. The model studio at `/tools/car-preview.html` has a car selector, steering, wheel rotation, paint and lamp controls.
 
 Source credits, licenses and checksums live in each `public/models/<asset>/ATTRIBUTION.md`; all credits are also linked in the game. See `tools/car-assets/README.md` to reproduce the asset preparation. New car performance is game tuning; acceleration figures are measured using this game’s physics, not claimed factory test results.

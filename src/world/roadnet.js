@@ -6,6 +6,8 @@ export class Road {
     this.id = d.id;
     this.name = d.name;
     this.kind = d.kind;
+    this.city = !!d.city;
+    this.surface = d.surface;
     this.width = d.width;
     this.closed = d.closed;
     this.pts = d.pts;
@@ -39,6 +41,12 @@ export class Road {
       this.tan[i * 2 + 1] = dz / l;
     }
     this.lanes = d.kind === 'highway' ? 4 : d.kind === 'runway' ? 2 : 2;
+    this.kerb = d.kind === 'track' ? kerbFlags(this) : null;
+  }
+
+  // kerb flags at sample i: 1 = left edge, 2 = right edge (see kerbFlags)
+  kerbAt(i) {
+    return this.kerb ? this.kerb[i] : 0;
   }
 
   // Point at arc-length s (wraps for closed roads). Writes into out {x,y,z,tx,tz,i}
@@ -80,6 +88,40 @@ export class Road {
     while (da < -Math.PI) da += Math.PI * 2;
     return da / (2 * span);
   }
+}
+
+// Race circuits: kerbs on the inside of every corner and on the outside of the tighter
+// ones, running a little before and after the apex. Bit 1 = left edge, bit 2 = right edge.
+function kerbFlags(road) {
+  const n = road.n,
+    p = road.pts,
+    K = 8;
+  const raw = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const a = road.closed ? (i - K + n) % n : Math.max(0, i - K),
+      c = road.closed ? (i + K) % n : Math.min(n - 1, i + K);
+    const ax = p[i * 3] - p[a * 3],
+      az = p[i * 3 + 2] - p[a * 3 + 2];
+    const bx = p[c * 3] - p[i * 3],
+      bz = p[c * 3 + 2] - p[i * 3 + 2];
+    const la = Math.hypot(ax, az),
+      lb = Math.hypot(bx, bz);
+    if (la < 1e-3 || lb < 1e-3) continue;
+    const curv = (ax * bz - az * bx) / (la * lb) / ((la + lb) / 2); // + bends right
+    if (Math.abs(curv) < 1 / 230) continue;
+    const inside = curv > 0 ? 2 : 1;
+    raw[i] = inside | (Math.abs(curv) > 1 / 120 ? 3 ^ inside : 0);
+  }
+  const out = new Uint8Array(n);
+  const R = 7;
+  for (let i = 0; i < n; i++) {
+    if (!raw[i]) continue;
+    for (let k = -R; k <= R; k++) {
+      const j = road.closed ? (i + k + n) % n : i + k;
+      if (j >= 0 && j < n) out[j] |= raw[i];
+    }
+  }
+  return out;
 }
 
 export class RoadNetwork {

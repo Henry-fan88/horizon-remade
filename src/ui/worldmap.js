@@ -4,6 +4,7 @@ import { drawIcon } from './hud.js';
 import { clamp, formatTime } from '../core/math.js';
 import { formatValue } from '../game/stunts.js';
 import { escapeHtml } from '../game/race.js';
+import { districtDestinations, cityDestinations } from '../world/districts.js';
 
 export class WorldMap {
   constructor(game, mapImages) {
@@ -21,6 +22,7 @@ export class WorldMap {
         <span><i style="background:#48f0a0"></i>Online players</span>
       </div>
       <div class="wm-help"><kbd>DRAG</kbd> pan · <kbd>WHEEL</kbd> zoom · <kbd>CLICK</kbd> select · <kbd>M</kbd>/<kbd>ESC</kbd> close</div>
+      <div class="wm-destinations"><label for="wm-district">EXPLORE THE ISLAND</label><select id="wm-district"><option value="">Choose an environment</option></select></div>
       <div class="wm-panel"></div>`;
     this.canvas = this.el.querySelector('canvas');
     this.panel = this.el.querySelector('.wm-panel');
@@ -31,6 +33,19 @@ export class WorldMap {
     this.open = false;
     this.selected = null;
     this.drag = null;
+    const districtSelect = this.el.querySelector('#wm-district');
+    this.destinations = [...districtDestinations(game.world.network),...cityDestinations(game.world.network)].map(d => ({ ...d, kind: 'district', type: 'viewpoint' }));
+    for (const d of this.destinations) {
+      const option = document.createElement('option'); option.value = d.id; option.textContent = `${d.label} · ${d.name}`;
+      districtSelect.append(option);
+    }
+    districtSelect.addEventListener('change', () => {
+      const destination = this.destinations.find(d => d.id === districtSelect.value);
+      if (!destination) return;
+      this.cx = destination.x; this.cz = destination.z; this.zoom = 3.1;
+      this.select(destination); this.draw();
+    });
+    districtSelect.addEventListener('keydown', e => e.stopPropagation());
     const c = this.canvas;
     c.addEventListener('pointerdown', (e) => {
       this.drag = { x: e.clientX, y: e.clientY, moved: false, cx: this.cx, cz: this.cz };
@@ -91,6 +106,7 @@ export class WorldMap {
     this.zoom = 1.6;
     this.selected = null;
     this.panel.classList.remove('on');
+    this.el.querySelector('#wm-district').value = '';
     requestAnimationFrame(() => this.el.classList.add('in'));
   }
 
@@ -103,6 +119,7 @@ export class WorldMap {
   items() {
     const game = this.game;
     const out = [];
+    out.push(...this.destinations);
     for (const r of game.events.races) out.push({ kind: 'race', type: r.type === 'dirt' ? 'dirt' : r.type === 'drag' ? 'drag' : 'race', x: r.marker.x, z: r.marker.z, name: r.name, ref: r });
     for (const s of game.events.stunts) out.push({ kind: 'stunt', type: s.type, x: s.x, z: s.z, name: s.name, ref: s });
     out.push({ kind: 'festival', type: 'festival', x: game.festivalPos.x, z: game.festivalPos.z, name: 'Festival Site' });
@@ -143,7 +160,7 @@ export class WorldMap {
       const s = it.ref;
       const rec = game.save.data.records[s.id];
       info = `<div class="k">PR STUNT</div><div class="t">${escapeHtml(s.name)}</div><div class="s">${rec ? 'Best: ' + formatValue(s, rec.value, game.settings.units) + ' ' + '★'.repeat(rec.stars) : 'No record yet'}</div>`;
-    } else info = `<div class="k">LOCATION</div><div class="t">${escapeHtml(it.name)}</div>`;
+    } else info = `<div class="k">${it.kind === 'district' ? escapeHtml(it.label.toUpperCase()) : 'LOCATION'}</div><div class="t">${escapeHtml(it.name)}</div>${it.description ? `<div class="s">${escapeHtml(it.description)}</div>` : ''}`;
     this.panel.innerHTML = `${info}<div class="a"></div>`;
     const a = this.panel.querySelector('.a');
     const btn = (label, cls, fn) => {
@@ -162,7 +179,7 @@ export class WorldMap {
       if (it.kind === 'race') game.startRace(it.ref, true);
       else if (it.kind === 'stunt') game.fastTravelTo(it.x - (it.ref.tx || 0) * 150, it.z - (it.ref.tz || 0) * 150, Math.atan2(it.ref.tx || 0, it.ref.tz || 1));
       else if (it.kind === 'festival') game.fastTravelFestival();
-      else game.fastTravelTo(it.x, it.z, game.player.physics.heading);
+      else game.fastTravelTo(it.x, it.z, it.heading ?? game.player.physics.heading);
     });
     this.panel.classList.add('on');
   }
@@ -213,15 +230,16 @@ export class WorldMap {
     // grid lines
     g.strokeStyle = 'rgba(255,255,255,0.06)';
     g.lineWidth = 1;
-    for (let k = -2048; k <= 2048; k += 512) {
-      const [ax, ay] = this.worldToScreen(k, -2048),
-        [bx, by] = this.worldToScreen(k, 2048);
+    const half = WORLD.size / 2;
+    for (let k = -half; k <= half; k += 512) {
+      const [ax, ay] = this.worldToScreen(k, -half),
+        [bx, by] = this.worldToScreen(k, half);
       g.beginPath();
       g.moveTo(ax, ay);
       g.lineTo(bx, by);
       g.stroke();
-      const [cx, cy] = this.worldToScreen(-2048, k),
-        [ex, ey] = this.worldToScreen(2048, k);
+      const [cx, cy] = this.worldToScreen(-half, k),
+        [ex, ey] = this.worldToScreen(half, k);
       g.beginPath();
       g.moveTo(cx, cy);
       g.lineTo(ex, ey);
@@ -252,6 +270,11 @@ export class WorldMap {
       const [sx, sy] = this.worldToScreen(it.x, it.z);
       if (sx < -20 || sy < -20 || sx > W + 20 || sy > H + 20) continue;
       drawIcon(g, it.type, sx, sy, this.selected === it ? 1.6 : 1.25);
+      if (it.kind === 'district') {
+        g.font = '600 13px Barlow, sans-serif'; g.textAlign = 'center';
+        g.lineWidth = 4; g.strokeStyle = '#172321'; g.strokeText(it.name, sx, sy - 21);
+        g.fillStyle = '#f1ead6'; g.fillText(it.name, sx, sy - 21);
+      }
     }
     if (this.selected && this.selected.kind === 'waypoint') {
       const [sx, sy] = this.worldToScreen(this.selected.x, this.selected.z);

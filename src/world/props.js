@@ -8,6 +8,9 @@ import { makeTextTexture, makeSmokeTexture } from './textures.js';
 import { makeArchitecturalMaterials } from './architecture-materials.js';
 import { atmo, fogUniforms } from './sky.js';
 import { mulberry32 } from '../core/math.js';
+import { buildCircuit } from './circuit-props.js';
+import { buildDistrictLandmarks } from './district-props.js';
+import { buildCity } from './city-props.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -169,9 +172,12 @@ export class Props {
     const hf = this.world.hf;
     this.h = (x, z) => hf.height(x, z);
     this.buildFestival();
-    this.buildTown();
+    buildCity(this);
+    buildDistrictLandmarks(this);
     this.buildAirfield(data.airfield);
+    this.circuit = buildCircuit(this, data);
     this.buildLamps(data.props.lamps);
+    this.buildPosts(data.props.posts);
     this.buildRails(data.props.rails);
     this.buildChevrons(data.props.chevrons);
     this.buildFences(data.props.fences);
@@ -905,6 +911,32 @@ export class Props {
     const railMat = std(0xb9bec4, { metalness: 0.85, roughness: 0.35 });
     this.chunked(beam, railMat, bm, { maxDist: 700 });
     this.chunked(post, std(0x5a5d62, { metalness: 0.6 }), pm, { maxDist: 450 });
+  }
+
+  // Delineator posts: white, a black band and a reflector on each face along the road
+  // (it catches headlights at night). They fold flat when hit and stand up again later.
+  buildPosts(posts) {
+    const n = (posts?.length || 0) / 4;
+    if (!n) return;
+    const paint = (g, c) => {
+      const col = new Float32Array(g.attributes.position.count * 3);
+      for (let i = 0; i < col.length; i += 3) col.set(c, i);
+      g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+      return g;
+    };
+    const body = mergeGeometries([
+      paint(new THREE.BoxGeometry(0.1, 0.8, 0.12).translate(0, 0.4, 0), [0.86, 0.86, 0.83]),
+      paint(new THREE.BoxGeometry(0.104, 0.25, 0.124).translate(0, 0.905, 0), [0.03, 0.03, 0.03]),
+    ]);
+    const refl = mergeGeometries([new THREE.PlaneGeometry(0.05, 0.14).translate(0, 0.9, 0.063), new THREE.PlaneGeometry(0.05, 0.14).rotateY(Math.PI).translate(0, 0.9, -0.063)]);
+    const bodyMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.55, metalness: 0 });
+    const reflMat = new THREE.MeshStandardMaterial({ color: 0xff9a1f, emissive: 0xff8a10, emissiveIntensity: 0.1, roughness: 0.3 });
+    this.nightMats.push({ mat: reflMat, day: 0.1, night: 1.4 });
+    const ms = [];
+    for (let i = 0; i < n; i++) ms.push(mat4(posts[i * 4], posts[i * 4 + 1] - 0.05, posts[i * 4 + 2], posts[i * 4 + 3]));
+    const bodies = this.chunked(body, bodyMat, ms, { maxDist: 520, shadowDist: 120, cell: 384 });
+    const lights = this.chunked(refl, reflMat, ms, { maxDist: 520, cast: false, cell: 384 });
+    for (let i = 0; i < n; i++) this.addSmashable({ x: posts[i * 4], z: posts[i * 4 + 2], y: posts[i * 4 + 1], r: 0.2, kind: 'post', mass: 3, parts: [bodies[i], lights[i]], m0: ms[i] });
   }
 
   buildChevrons(chev) {

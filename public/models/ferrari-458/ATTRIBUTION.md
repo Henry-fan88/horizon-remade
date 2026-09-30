@@ -8,7 +8,7 @@
 - Three.js asset license inventory: https://github.com/mrdoob/three.js/issues/23089#issuecomment-1001258942
 - Author attribution in the official example: https://github.com/mrdoob/three.js/blob/r186/examples/webgl_materials_car.html
 
-The original GLB is stored here unchanged. Runtime adaptations in `src/vehicle/realcar.js` fit the visual model to the game's existing GT chassis, separate steering from wheel rotation, and revise paint, glass, metal, rubber, interior, and lighting materials. This is a visual adaptation with the draft game's handling, not a simulation of the real Ferrari's performance specifications. Existing GT save entries remain compatible.
+The original GLB is stored here unchanged. Runtime adaptations in `src/vehicle/realcar.js` fit the visual model to the game's chassis (the model's own 2.65 m wheelbase and tracks), separate steering from wheel rotation, turn the steering wheel for the in-car camera, and revise paint, glass, metal, rubber, interior, and lighting materials. This is a visual adaptation with the draft game's handling, not a simulation of the real Ferrari's performance specifications. Existing GT save entries remain compatible.
 
 Ferrari names and marks belong to their respective owners. Their appearance does not imply endorsement. Retain this attribution and the in-game model credit when redistributing the asset or a build containing it.
 

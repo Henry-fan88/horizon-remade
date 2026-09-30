@@ -443,12 +443,10 @@ export class Menus {
           statBar('LAUNCH', s.launch),
           statBar('BRAKING', s.braking),
           statBar('OFFROAD', s.offroad),
-          h('div', { class: 'sec-title' }, 'PAINT'),
-          swatches,
-          h('div', { class: 'sec-title' }, 'FINISH'),
-          finishes,
-          h('div', { class: 'sec-title' }, 'RIMS'),
-          rims,
+          // race liveries are painted into the model's texture and stay as authored
+          ...(spec.style.livery
+            ? [h('div', { class: 'sec-title' }, 'LIVERY'), h('div', { class: 'detail-specs' }, `Original ${spec.year} race livery`)]
+            : [h('div', { class: 'sec-title' }, 'PAINT'), swatches, h('div', { class: 'sec-title' }, 'FINISH'), finishes, h('div', { class: 'sec-title' }, 'RIMS'), rims]),
           h(
             'div',
             { class: 'dialog-actions' },
@@ -683,7 +681,7 @@ export class Menus {
             ['cosmetic', 'Cosmetic'],
             ['simulation', 'Simulation'],
           ]),
-          toggle('Traffic', 'traffic'),
+          toggle('Traffic & pedestrians', 'traffic'),
           h('div', { class: 'sec-title' }, 'PROFILE'),
           h('label', { class: 'setting' }, h('span', {}, 'Driver name'), nameInput),
           h(

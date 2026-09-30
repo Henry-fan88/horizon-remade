@@ -10,6 +10,8 @@ export const ROAD_CROSS = {
   street: { crown: 0.02, emax: 0, vd: 0 },
   runway: { crown: 0.01, emax: 0, vd: 0 },
   dirt: { crown: 0.03, emax: 0.06, vd: 18 },
+  // race circuit: light crown for drainage and a little camber in the corners
+  track: { crown: 0.012, emax: 0.035, vd: 40 },
 };
 
 const G = 9.81;

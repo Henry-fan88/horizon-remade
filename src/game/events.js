@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { clamp, lerp, smoothstep } from '../core/math.js';
 import { LOCATIONS } from '../world/worldgen.js';
+import { ISLANDS, local, toWorld } from '../world/regions.js';
 import { fogUniforms } from '../world/sky.js';
 import { PALETTE } from '../config.js';
 
@@ -355,19 +356,70 @@ export function buildEvents(world) {
   races.push({ id: 'sierra', name: 'Sierra Pass Sprint', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: piece(sierra, 0, sierra.length), ai: 7, desc: 'Twisting climb through the north-eastern ridges.' });
   // Selva dirt scramble
   races.push({ id: 'selva', name: 'Selva Scramble', type: 'dirt', series: 'Dirt Racing', laps: 1, closed: false, pts: piece(selva, 0, selva.length), ai: 5, desc: 'Gravel and mud through the western jungle.' });
-  // Town street circuit
+  // Preserve the saved event id while following the rebuilt city's actual streets.
   {
-    const c = [
-      [T.x - 110, T.z - 110, 10],
-      [T.x + 110, T.z - 110, 10],
-      [T.x + 110, T.z + 110, 10],
-      [T.x - 110, T.z + 110, 10],
-    ];
-    const pts = densify(filletCorners(densify(c, 6), 16), 3);
-    races.push({ id: 'town', name: 'Pueblo Street Circuit', type: 'circuit', series: 'Street Scene', laps: 3, closed: true, pts, ai: 5, desc: 'Tight corners around the town blocks.' });
+    const market=roadByName(net,'Market Street'),second=roadByName(net,'Second Street');
+    const broadway=roadByName(net,'Broadway'),columbus=roadByName(net,'Columbus Avenue');
+    const join=(road,x,z)=>sNear(road,T.x+x,T.z+z);
+    const pts=[...piece(market,join(market,100,55),join(market,198,3)),
+      ...piece(second,join(second,198,3),join(second,150,-180)),
+      ...piece(broadway,join(broadway,150,-180),join(broadway,-62,-162)),
+      ...piece(columbus,join(columbus,-62,-162),join(columbus,100,55))];
+    races.push({ id:'town',name:'City by the Bay Circuit',type:'circuit',series:'Street Scene',laps:3,closed:true,pts,ai:5,desc:'Market Street, downtown towers and the diagonal climb through North Beach.' });
   }
   // Runway drag
   races.push({ id: 'drag', name: 'Runway Drag', type: 'drag', series: 'Drag Racing', laps: 1, closed: false, pts: piece(runway, 0, runway.length), ai: 1, desc: 'Head to head down the airfield runway.' });
+
+  // ---------------------------------------------------------------- outer islands
+  const track = net.roads.find((r) => r.kind === 'track');
+  const pass = roadByName(net, 'Paso Nevado');
+  const puenteN = roadByName(net, 'Puente Norte');
+  const puenteE = roadByName(net, 'Puente Este');
+  const puenteW = roadByName(net, 'Puente Oeste');
+  const canyon = roadByName(net, 'Cañón Rojo Rally');
+  const paddockRoad = roadByName(net, 'Paddock Road');
+  // Autódromo Grand Prix: three laps from the start line in the middle of the main straight
+  if (track) {
+    const I = ISLANDS.circuit;
+    let s0 = 0,
+      best = 1e9;
+    for (let i = 0; i < track.n; i++) {
+      const { u, v } = local(I, track.pts[i * 3], track.pts[i * 3 + 2]);
+      const d = Math.abs(u) + Math.abs(v - 300) * 4;
+      if (d < best) {
+        best = d;
+        s0 = track.s[i];
+      }
+    }
+    const pts = [...piece(track, s0, track.length), ...piece(track, 0, s0)];
+    races.push({ id: 'autodromo', name: 'Autódromo Grand Prix', type: 'circuit', series: 'Road Racing', laps: 3, closed: true, pts, ai: 7, venue: 'autodromo', desc: 'Three laps of the 4.4 km Autódromo Horizonte: kerbs, gravel traps and a packed grandstand.' });
+  }
+  // Paso Nevado: over the north causeway and up six hairpins to the saddle, and back down
+  if (pass && puenteN) {
+    races.push({ id: 'nevado-up', name: 'Paso Nevado Hillclimb', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: [...piece(puenteN, 0, puenteN.length), ...piece(pass, 0, pass.length)], ai: 7, desc: 'Across the north causeway and up the switchbacks to the snow line.' });
+    races.push({ id: 'nevado-down', name: 'Paso Nevado Descent', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: [...piece(pass, pass.length, 0), ...piece(puenteN, puenteN.length, 0)], ai: 7, desc: 'Brake hard: six hairpins down the mountain and back over the causeway.' });
+  }
+  // Cañón Rojo rally: one lap of the canyon loop, starting beside the causeway
+  if (canyon) {
+    const s0 = sNear(canyon, -2062, 300);
+    races.push({ id: 'canyon', name: 'Cañón Rojo Rally', type: 'dirt', series: 'Dirt Racing', laps: 1, closed: true, pts: [...piece(canyon, s0, canyon.length), ...piece(canyon, 0, s0)], ai: 5, desc: 'Red-rock canyon floor, the west coast flats and a jump over the dunes.' });
+  }
+  // Tres Islas Grand Tour: off the canyon island, along the south coast on the ring road and
+  // out over the east causeway to the Autódromo paddock
+  if (puenteW && puenteE && paddockRoad) {
+    const jw = sNear(ring, puenteW.pts[0], puenteW.pts[2]);
+    const je = sNear(ring, puenteE.pts[0], puenteE.pts[2]);
+    // the shorter way round the ring (it may cross the ring's start point)
+    const L = ring.length;
+    const d = (((je - jw) % L) + L) % L;
+    const pts = [
+      ...piece(puenteW, puenteW.length, 0),
+      ...piece(ring, jw, d < L / 2 ? jw + d : jw - (L - d)),
+      ...piece(puenteE, 0, puenteE.length),
+      ...piece(paddockRoad, 0, paddockRoad.length),
+    ];
+    races.push({ id: 'tres-islas', name: 'Tres Islas Grand Tour', type: 'sprint', series: 'Street Scene', laps: 1, closed: false, pts, ai: 7, desc: 'Island to island: off the red-rock canyon, along the south coast and over the east causeway to the Autódromo paddock.' });
+  }
 
   for (const r of races) {
     r.route = new Route(r.pts, r.closed, world);
@@ -376,6 +428,11 @@ export function buildEvents(world) {
     r.start = { x: p.x, z: p.z, tx: p.tx, tz: p.tz };
     const ms = r.route.pointAt(r.closed ? -30 : 20, 0, 0);
     r.marker = { x: ms.x, z: ms.z };
+    // the circuit is walled in: its event beacon stands in the paddock
+    if (r.venue === 'autodromo') {
+      const [px, pz] = toWorld(ISLANDS.circuit, 40, 430);
+      r.marker = { x: px, z: pz };
+    }
   }
 
   // ---------------------------------------------------------------- PR stunts
@@ -418,6 +475,17 @@ export function buildEvents(world) {
   drifty(sierra, 'Sierra Drift Zone', sierra.length * 0.35, 600);
   drifty(selva, 'Selva Drift Zone', selva.length * 0.3, 500);
   drifty(ring, 'Faro Drift Zone', ring.length * 0.38, 700);
+  if (puenteE) addTrap(puenteE, puenteE.length * 0.55, 'Puente Este Speed Trap');
+  if (puenteW) addTrap(puenteW, puenteW.length * 0.5, 'Puente Oeste Speed Trap');
+  if (pass) drifty(pass, 'Paso Nevado Drift Zone', pass.length * 0.25, 900);
+  if (canyon) drifty(canyon, 'Cañón Drift Zone', canyon.length * 0.08, 600);
+  if (track) {
+    // average-speed zone on the back straight
+    const [bx, bz] = toWorld(ISLANDS.circuit, 330, -385);
+    const sb = sNear(track, bx, bz);
+    const a = track.pointAt(sb, {});
+    stunts.push({ id: 'zone-track', type: 'zone', name: 'Autódromo Speed Zone', road: track, s: sb, len: 450, x: a.x, z: a.z, tx: a.tx, tz: a.tz, width: track.width, stars: [170, 210, 250] });
+  }
   // danger signs (jumps sculpted into the terrain)
   for (const j of world.data.jumps || []) {
     stunts.push({ id: 'jump-' + stunts.length, type: 'jump', name: j.name, x: j.x, z: j.z, tx: j.dx, tz: j.dz, lip: j.lip, stars: [60, 95, 135] });

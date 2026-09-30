@@ -7,6 +7,7 @@
     <style>
       :root { color-scheme: dark; font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #101216; color: #e9edf3; }
       * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
       body { margin: 0; }
       main { width: min(1440px, 100%); padding: 24px; margin: auto; }
       header { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
@@ -55,7 +56,7 @@
       <div class="controls">
         <div class="control-group"><label for="car-select">CAR <select id="car-select" aria-label="Car model"></select></label></div>
         <div class="control-group"><label for="detail">DETAIL <select id="detail"><option value="0">Near</option><option value="60">Medium</option><option value="180">Far</option></select></label></div>
-        <div class="control-group" aria-label="Camera views"><span class="control-title">VIEW</span><button data-view="hero" aria-pressed="true">¾</button><button data-view="front" aria-pressed="false">Front</button><button data-view="rear" aria-pressed="false">Rear</button><button data-view="side" aria-pressed="false">Side</button></div>
+        <div class="control-group" aria-label="Camera views"><span class="control-title">VIEW</span><button data-view="hero" aria-pressed="true">¾</button><button data-view="front" aria-pressed="false">Front</button><button data-view="rear" aria-pressed="false">Rear</button><button data-view="side" aria-pressed="false">Side</button><button data-view="cockpit" aria-pressed="false">Cockpit</button></div>
         <div class="control-group" aria-label="Paint presets"><span class="control-title">PAINT</span><button class="paint" data-paint="#c81d25" style="--paint:#c81d25" aria-label="Rosso red" aria-pressed="true"></button><button class="paint" data-paint="#e8e9e8" style="--paint:#e8e9e8" aria-label="Pearl white" aria-pressed="false"></button><button class="paint" data-paint="#e6b832" style="--paint:#e6b832" aria-label="Yellow" aria-pressed="false"></button><button class="paint" data-paint="#183d6b" style="--paint:#183d6b" aria-label="Deep blue" aria-pressed="false"></button><button class="paint" data-paint="#20232a" style="--paint:#20232a" aria-label="Graphite" aria-pressed="false"></button></div>
         <div class="control-group"><label for="steer">Steering <input id="steer" type="range" min="-32" max="32" value="0" /></label><button id="straight" title="Reset steering angle">Reset</button><label><input id="motion" type="checkbox" /> Roll wheels</label></div>
         <div class="control-group"><label><input id="brake" type="checkbox" /> Brake</label><label><input id="night" type="checkbox" /> Night lamps</label><label><input id="reverse" type="checkbox" /> Reverse</label><label><input id="shadows" type="checkbox" checked /> Shadows</label></div>
@@ -68,6 +69,7 @@
       import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
       import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
       import { buildCar } from '/src/vehicle/carmodel.js';
+      import { setInteriorView } from '/src/vehicle/cockpit.js';
       import { preloadRealCar } from '/src/vehicle/realcar.js';
       import { preloadImportedCars } from '/src/vehicle/importedcars.js';
       import { MODEL_CREDITS } from '/src/vehicle/modelcatalog.js';
@@ -138,6 +140,18 @@
       const fitCamera = view => {
         if (!model) return;
         currentView = view;
+        setInteriorView(model, view === 'cockpit');
+        controls.enabled = view !== 'cockpit';
+        camera.fov = view === 'cockpit' ? spec.style.cockpit.fov : 32;
+        camera.near = view === 'cockpit' ? .025 : .05;
+        camera.updateProjectionMatrix();
+        document.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.view === view)));
+        if (view === 'cockpit') {
+          camera.position.fromArray(spec.style.cockpit.eye);
+          controls.target.copy(camera.position).add(new THREE.Vector3(0, -.08, 2));
+          camera.lookAt(controls.target);
+          return;
+        }
         const box = new THREE.Box3().setFromObject(model.group);
         const center = box.getCenter(new THREE.Vector3());
         center.y = Math.max(.6, center.y);
@@ -233,7 +247,12 @@
         const size = bounds.getSize(new THREE.Vector3());
         const boundsOK = [...bounds.min, ...bounds.max].every(Number.isFinite) && size.x > 1 && size.y > .8 && size.z > 3 && size.x < st.W + .16 && size.y < st.H + .2 && size.z < st.L + .16 && bounds.min.y >= -.08 && bounds.min.y <= .08;
         mark('Finite bounds and tyres at floor', boundsOK, `${size.x.toFixed(2)} × ${size.y.toFixed(2)} × ${size.z.toFixed(2)} m; floor ${bounds.min.y.toFixed(3)} m`);
-        mark('Paint and lamp controls available', Boolean(model.paintMat?.color && ['tailMat', 'headMat', 'revMat'].every(k => model.lights?.[k]?.emissive) && ['head', 'tail', 'reverse'].every(k => model.lights[k].length)), 'paint · brake · headlamps · reverse');
+        if (st.openWheel) {
+          mark('Race livery retained without road lamps', model.paintMat.userData.livery === true && model.lights.head.length === 0 && model.lights.reverse.length === 0);
+          mark('Cockpit steering wheel available', Boolean(model.steeringWheel?.isObject3D));
+        } else {
+          mark('Paint and lamp controls available', Boolean(model.paintMat?.color && ['tailMat', 'headMat', 'revMat'].every(k => model.lights?.[k]?.emissive) && ['head', 'tail', 'reverse'].every(k => model.lights[k].length)), 'paint · brake · headlamps · reverse');
+        }
         const primaryMaterials = materialSet(model);
         const primaryGeometries = geometrySet(model);
         for (const material of primaryMaterials) material.addEventListener('dispose', () => materialDisposals++);
@@ -271,6 +290,8 @@
         loadState.hidden = true;
 
         document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => fitCamera(button.dataset.view)));
+        if (spec.style.livery) document.querySelector('[aria-label="Paint presets"]').hidden = true;
+        if (spec.style.openWheel) for (const id of ['brake', 'night', 'reverse']) document.querySelector('#' + id).closest('label').hidden = true;
         document.querySelectorAll('[data-paint]').forEach(button => button.addEventListener('click', () => {
           model.paintMat.color.set(button.dataset.paint);
           document.querySelectorAll('[data-paint]').forEach(paint => paint.setAttribute('aria-pressed', String(paint === button)));
@@ -289,10 +310,11 @@
           lastFrame = now;
           if (motion.checked) wheelAngle -= dt * 2.8;
           model.wheels.forEach((wheel, index) => { wheel.steer.rotation.y = index < 2 ? THREE.MathUtils.degToRad(-Number(steer.value)) : 0; wheel.spin.rotation.x = wheelAngle; });
+          if (model.steeringWheel) model.steeringWheel.rotation.z = -THREE.MathUtils.degToRad(Number(steer.value)) * (spec.style.cockpit?.ratio ?? 14);
           model.lights.tailMat.emissiveIntensity = (night.checked ? 1.4 : .5) + (brake.checked ? 5.5 : 0);
           model.lights.headMat.emissiveIntensity = night.checked ? 6 : 1.4;
           model.lights.revMat.emissiveIntensity = reverse.checked ? 3 : 0;
-          controls.update();
+          if (controls.enabled) controls.update();
           renderer.render(scene, camera);
           frames++;
           if (now - lastStats > 1000) {

@@ -1768,6 +1768,32 @@ kbd {
   gap: 8px;
   margin-top: 14px;
 }
+.wm-destinations {
+  position: absolute;
+  left: 36px;
+  bottom: 78px;
+  padding: 15px 17px;
+  background: rgba(12, 20, 24, .94);
+  border-left: 3px solid #e8c98a;
+  max-width: calc(100vw - 72px);
+}
+.wm-destinations label {
+  display: block;
+  font-size: 11px;
+  letter-spacing: .17em;
+  margin-bottom: 8px;
+  color: #e8c98a;
+}
+.wm-destinations select {
+  width: 310px;
+  max-width: 100%;
+  padding: 9px;
+  border: 1px solid #ffffff40;
+  background: #18252b;
+  color: #f1f2ee;
+  font: inherit;
+  font-size: 14px;
+}
 
 /* online nametags */
 .nametag {

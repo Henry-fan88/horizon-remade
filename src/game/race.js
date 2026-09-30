@@ -170,9 +170,10 @@ export class RaceManager {
     const player = game.player;
     const racers = [];
     const nAI = opts.online ? 0 : def.ai;
-    // opponents from a similar performance class
+    // opponents from a similar performance class (single-seaters only race each other)
     const pPI = player.spec.pi;
-    const pool = CARS.filter((c) => Math.abs(c.pi - pPI) < 170 && (def.type === 'dirt' ? c.offroad > 0.3 || c.style.sill > 0.2 : true));
+    const formula = !!player.spec.formula;
+    const pool = CARS.filter((c) => !!c.formula === formula && (formula || Math.abs(c.pi - pPI) < 170));
     const names = drivatarNames(nAI, Math.floor(Math.random() * 1000));
     const lanesTotal = opts.online ? Math.max(opts.gridSize || 1, (opts.gridIndex ?? 0) + 1) : nAI + 1;
     const gridIndexPlayer = opts.online ? opts.gridIndex ?? 0 : Math.min(lanesTotal - 1, Math.max(0, lanesTotal - 3));
@@ -323,6 +324,8 @@ export class RaceManager {
     } else if (A.state === 'countdown') {
       A.timer -= dt;
       this.revWhileFrozen(dt);
+      // the Autódromo's gantry lights come on one by one, then go out for the start
+      if (A.def.venue === 'autodromo') game.props.circuit?.setLights(A.timer > 0 ? Math.min(5, Math.floor((3 - A.timer) * 5 / 2.6) + 1) : 0);
       const c = Math.ceil(A.timer);
       if (c !== A.lastCount && c > 0) {
         A.lastCount = c;
@@ -550,6 +553,7 @@ export class RaceManager {
     }
     game.scene.remove(A.line, A.finishGate, ...A.gates);
     A.line.geometry.dispose();
+    game.props.circuit?.setLights(0);
     game.hud.setRaceInfo('');
     game.hud.setPrompt('');
     game.drafting = false;
