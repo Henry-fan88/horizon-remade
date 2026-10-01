@@ -1,6 +1,6 @@
 # HORIZON REMADE
 
-An open-world festival racing game that runs in the browser, inspired by the Forza Horizon series.
+An open-world festival racing game for laptop and desktop browsers, inspired by the Forza Horizon series.
 It has a volcanic island, a road network, a festival hub, skill chains, races against AI drivers,
 PR stunts, traffic, Wheelspins, a garage, and **online multiplayer** where drivers share the world
 and can race each other.
@@ -61,7 +61,7 @@ running game server:
 
 ## Controls
 
-| Action | Keyboard | Gamepad |
+| Action | Keyboard / Mouse | Gamepad |
 | --- | --- | --- |
 | Accelerate / brake & reverse | W / S (or ↑ / ↓) | RT / LT |
 | Steer | A / D (or ← / →) | Left stick |
@@ -69,6 +69,7 @@ running game server:
 | Rewind (hold) | R | X |
 | Reset car to road | T | Right-stick button |
 | Change camera / look back | C / B | Y / Left-stick button |
+| Look around (all cameras) | Left mouse button + drag | — |
 | Manual shift up / down | E / Q | RB / LB |
 | Start event | Enter | A |
 | World map | M | View |
@@ -76,7 +77,11 @@ running game server:
 | Radio on/off · Horn · Lights | N · H · L | — |
 | Join online race · Chat | J · Y | — |
 
-On phones and tablets, touch controls appear automatically.
+Play with a keyboard and mouse, or a gamepad, in a laptop or desktop browser.
+In **any driving camera**, drag with the left mouse button to look 360 degrees around
+and up or down. **Chase** and **Far Chase** orbit around the car, keeping it in frame;
+**Hood**, **Bumper** and **Cockpit** look from their normal camera positions. After three
+seconds without drag movement, the camera smoothly returns to its normal driving view.
 
 ## Features
 
@@ -151,12 +156,12 @@ public/models/     Five attributed car models, LODs and credits (served locally)
 public/draco/      Local Draco decoder and its license
 public/environment/ CC0 photographed terrain and road materials, sources and checksums
 src/game/          Game loop/state, camera, skills, events, races, AI, traffic, stunts, rewind, GPS
-src/ui/            HUD, menus, world map, touch controls, car thumbnails
+src/ui/            HUD, menus, world map, car thumbnails
 src/net/           Multiplayer client
 ```
 
 URL flags that help during development: `?play` skips the title screen, `?fps` shows the frame
-rate, `?car=gt3` picks a car (`gt`, `shelby`, `gt3`, `fastback`), `?touch` forces touch controls, and `?server=wss://…` sets the
+rate, `?car=gt3` picks a car (`gt`, `shelby`, `gt3`, `fastback`), and `?server=wss://…` sets the
 multiplayer server.
 
 ## Customising

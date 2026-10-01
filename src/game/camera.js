@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { WORLD } from '../config.js';
 import { clamp, damp, dampAngle, wrapAngle } from '../core/math.js';
+import { CameraLook } from './camera-look.js';
 
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -14,6 +15,12 @@ const _worldUp = new THREE.Vector3(0, 1, 0);
 const _carUp = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _accel = new THREE.Vector3();
+const _lookRotation = new THREE.Euler(0, 0, 0, 'YXZ');
+const _lookOffset = new THREE.Quaternion();
+const _orbitPivot = new THREE.Vector3();
+const _orbitOffset = new THREE.Vector3();
+const _orbitAim = new THREE.Vector3();
+const _orbitAxis = new THREE.Vector3();
 
 export const CAMERA_MODES = ['Chase', 'Far Chase', 'Hood', 'Bumper', 'Cockpit'];
 export const COCKPIT = 4;
@@ -53,6 +60,7 @@ export class GameCamera {
     this.headYaw = 0;
     this.headPitch = 0;
     this.prevVelocity = new THREE.Vector3();
+    this.freeLook = new CameraLook();
   }
 
   get inCar() {
@@ -61,7 +69,7 @@ export class GameCamera {
 
   cycle() {
     this.mode = (this.mode + 1) % CAMERA_MODES.length;
-    this.initialized = false;
+    this.snap();
   }
 
   addShake(a) {
@@ -70,9 +78,11 @@ export class GameCamera {
 
   snap() {
     this.initialized = false;
+    this.freeLook.reset();
   }
 
   update(dt, vehicle, world) {
+    this.freeLook.update();
     const cam = this.camera;
     const p = vehicle.root.position;
     const q = vehicle.root.quaternion;
@@ -134,6 +144,7 @@ export class GameCamera {
       cam.position.copy(this.pos);
       cam.up.set(0, 1, 0);
       cam.lookAt(this.lookAt);
+      this.applyChaseLook(p, world);
       targetFov = this.baseFov + speedFov(kmh, 15, 160) + this.accelFov * 4.5;
     } else if (this.mode === COCKPIT) {
       targetFov = this.updateCockpit(dt, vehicle, kmh);
@@ -149,6 +160,7 @@ export class GameCamera {
       // keep horizon steadier: blend roll out
       _q.setFromRotationMatrix(_m);
       cam.quaternion.copy(_q);
+      this.applyMountedLook();
       targetFov = this.baseFov + 6 + speedFov(kmh, 12, 160) + this.accelFov * 3.5;
     }
     const near = this.mode === COCKPIT ? 0.04 : 0.3;
@@ -217,11 +229,39 @@ export class GameCamera {
     _up.copy(_carUp).lerp(_worldUp, 0.3).normalize();
     _m.lookAt(_origin, _look, _up);
     cam.quaternion.setFromRotationMatrix(_m);
+    this.applyMountedLook();
     return ck.fov + speedFov(kmh, 6, 170) + this.accelFov * 3;
+  }
+
+  applyMountedLook() {
+    const { yaw, pitch } = this.freeLook;
+    if (!yaw && !pitch) return;
+    _lookRotation.set(pitch, yaw, 0, 'YXZ');
+    this.camera.quaternion.multiply(_lookOffset.setFromEuler(_lookRotation));
+  }
+
+  applyChaseLook(position, world) {
+    const { yaw, pitch } = this.freeLook;
+    if (!yaw && !pitch) return;
+    // Rotate the normal camera and its aim together around the car, preserving the
+    // framing and follow spring. The normal pose keeps updating underneath the orbit.
+    _orbitPivot.copy(position).y += 0.85;
+    _orbitOffset.copy(this.pos).sub(_orbitPivot).applyAxisAngle(_worldUp, yaw);
+    _orbitAim.copy(this.lookAt).sub(_orbitPivot).applyAxisAngle(_worldUp, yaw);
+    _orbitAxis.crossVectors(_worldUp, _orbitOffset).normalize();
+    const elevation = Math.atan2(_orbitOffset.y, Math.hypot(_orbitOffset.x, _orbitOffset.z));
+    const tilt = elevation - clamp(elevation - pitch, -0.15, Math.PI * 0.45);
+    _orbitOffset.applyAxisAngle(_orbitAxis, tilt);
+    _orbitAim.applyAxisAngle(_orbitAxis, tilt);
+    const cam = this.camera;
+    cam.position.copy(_orbitOffset).add(_orbitPivot);
+    cam.position.y = Math.max(cam.position.y, Math.max(world.height(cam.position.x, cam.position.z), WORLD.seaLevel) + 0.6);
+    cam.lookAt(_orbitAim.add(_orbitPivot));
   }
 
   // slow orbit around a target (menus / title / garage)
   orbit(dt, target, radius = 6.5, height = 1.3, speed = 0.12, world = null) {
+    this.freeLook.reset();
     this.orbitAngle += dt * speed;
     const cam = this.camera;
     const x = target.x + Math.sin(this.orbitAngle) * radius,

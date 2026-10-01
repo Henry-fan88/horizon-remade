@@ -1,5 +1,30 @@
 // AI race driver: pure-pursuit steering on the racing line + speed-profile throttle/brake.
 import { clamp, lerp, wrapAngle } from '../core/math.js';
+import { SURF } from '../world/worldgen.js';
+import { SURFACE_INFO, tireSurfaceGrip } from '../world/surfaces.js';
+
+// Let opponents brake before the snow line and respect the same
+// cornering budget as the player's tyres. Entirely dry route profiles stay exact.
+export function snowSpeedProfile(profile, route, spec, skill = 1) {
+  if (!route.world?.surfaceAt) return profile;
+  const snowy = new Uint8Array(route.n);
+  let hasSnow = false;
+  for (let i = 0; i < route.n; i++) {
+    snowy[i] = route.world.surfaceAt(route.x[i], route.z[i]) === SURF.SNOW ? 1 : 0;
+    hasSnow ||= snowy[i] !== 0;
+  }
+  if (!hasSnow) return profile;
+  const v = profile.slice(), grip = tireSurfaceGrip(SURFACE_INFO[SURF.SNOW], spec);
+  for (let i = 0; i < route.n; i++) if (snowy[i]) v[i] = Math.min(v[i] * Math.sqrt(grip * 0.82), 20);
+  for (let pass = 0; pass < (route.closed ? 2 : 1); pass++) {
+    for (let i = route.n - (route.closed ? 1 : 2); i >= 0; i--) {
+      const j = route.idx(i + 1), snow = snowy[i] || snowy[j];
+      const decel = snow ? 9.81 * spec.grip * grip * 0.82 * skill : 7.5 * skill;
+      v[i] = Math.min(v[i], Math.sqrt(v[j] * v[j] + 2 * decel * Math.max(0.5, route.segLen(i))));
+    }
+  }
+  return v;
+}
 
 const NAMES = [
   'NightOwl', 'Sofia R.', 'ApexHunter', 'M. Okafor', 'DriftQueen', 'Kenji_T', 'Lucía V.', 'TurboTom', 'Ana Ferreira', 'xXSlideXx',
@@ -32,6 +57,7 @@ export class AIDriver {
     const spec = vehicle.spec;
     const topV = spec.topKmh / 3.6;
     this.profile = route.speedProfile(spec.grip * this.skill * (spec.style.sill > 0.3 ? 0.85 : 1), topV * 0.98, 7.5 * this.skill);
+    this.profile = snowSpeedProfile(this.profile, route, spec, this.skill);
     this.hint = -1;
     this.s = 0;
     this.stuck = 0;

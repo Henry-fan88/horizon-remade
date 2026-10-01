@@ -19,6 +19,7 @@ import { Input } from '../core/input.js';
 import { AudioEngine } from '../core/audio.js';
 import { Radio } from '../core/music.js';
 import { GameCamera } from './camera.js';
+import { CameraLookInput } from './camera-look.js';
 import { SkillSystem } from './skills.js';
 import { buildEvents, makeEventMarker, EVENT_COLORS } from './events.js';
 import { RaceManager } from './race.js';
@@ -32,7 +33,6 @@ import { HUD } from '../ui/hud.js';
 import { renderMapImages } from '../ui/mapimage.js';
 import { Menus } from '../ui/menus.js';
 import { WorldMap } from '../ui/worldmap.js';
-import { TouchControls } from '../ui/touch.js';
 import { NetClient } from '../net/net.js';
 import { ReflectionProbe } from '../render/probe.js';
 import { FarShadow, installShadowChunks } from '../render/farshadow.js';
@@ -140,6 +140,9 @@ export class Game {
     this.hud = new HUD(this.ui, this.mapImages);
     this.gameCam = new GameCamera(this.camera);
     this.gameCam.mode = Number(this.settings.camera) || 0;
+    this.cameraLookInput = new CameraLookInput(canvas, this.gameCam.freeLook, () =>
+      (this.state === 'freeroam' || this.state === 'race') && !this.paused &&
+      !this.menus?.open && !this.worldMap?.open && !this.input.textFocus && !document.hidden && this.race?.active?.state !== 'intro');
     this.effects = new Effects(this.scene, this.world);
     this.audio = new AudioEngine();
     this.radio = new Radio(this.audio);
@@ -172,8 +175,6 @@ export class Game {
     this.rewind = new Rewind(this);
     this.menus = new Menus(this);
     this.worldMap = new WorldMap(this, this.mapImages);
-    this.touch = new TouchControls(this);
-    if (this.touch.enabled) document.body.classList.add('touch-mode');
     this.net = new NetClient(this);
     this.probe = new ReflectionProbe(128);
     this.onStuntFinished = (st, value, stars) => {
@@ -270,8 +271,6 @@ export class Game {
       const dbg = gl.getExtension('WEBGL_debug_renderer_info');
       const gpu = String(dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER));
       this.gpuName = gpu;
-      const mobile = /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent) || matchMedia('(pointer: coarse)').matches;
-      if (mobile) return 'low';
       if (/Apple M[2-9]|Apple GPU|RTX|RX [67-9]\d{3}|Radeon Pro|Arc A7/i.test(gpu)) return 'high';
       if (/Intel|UHD|Iris|Mali|Adreno|PowerVR|Vega [0-9] |SwiftShader|llvmpipe/i.test(gpu)) return /SwiftShader|llvmpipe/i.test(gpu) ? 'low' : 'medium';
       return 'high';
@@ -339,7 +338,6 @@ export class Game {
   showTitle() {
     this.state = 'title';
     this.hud.show(false);
-    this.touch.show(false);
     this.menus.showTitle(() => this.startFromTitle());
     this.updateTitleStatus();
   }
@@ -371,7 +369,6 @@ export class Game {
     this.state = 'freeroam';
     this.paused = false;
     this.hud.show(true);
-    this.touch.show(true);
     this.gameCam.snap();
     if (this.settings.radio && this.audio.ready && !this.radio.playing) this.radio.start();
     const d = this.save.data;
@@ -699,6 +696,7 @@ export class Game {
     }
 
     // camera
+    this.cameraLookInput.sync();
     if (this.state === 'freeroam' || this.state === 'race' || this.state === 'results') {
       const rs = this.race.active?.state;
       if (rs === 'intro') this.gameCam.orbit(dt, this.player.root.position, 12, 3.5, 0.22, this.world);
@@ -799,7 +797,7 @@ export class Game {
     this._probeT = (this._probeT || 0) + dt;
     if (probe.ready && this._probeT < perFace) return;
     this._probeT = 0;
-    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, this.effects.sand.group, ...this.markers.map((m) => m.obj)];
+    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, this.effects.sand.group, this.effects.snow.group, ...this.markers.map((m) => m.obj)];
     const hide = this._probeList || (this._probeList = []);
     hide.length = 0;
     for (const o of this._probeHide) hide.push(o);

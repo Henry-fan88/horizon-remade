@@ -77,7 +77,7 @@ export class Menus {
   focusFirst() {
     const f = this.focusables();
     const pref = this.layer?.querySelector('.focusable.primary') || f[0];
-    pref?.focus({ preventScroll: false });
+    pref?.focus({ preventScroll: !!this.layer?.querySelector('.controls') });
   }
 
   navigate(dx, dy) {
@@ -285,7 +285,7 @@ export class Menus {
             ['Bonus boards', `${d.boards.length} / ${game.boardsTotal || 0}`],
           ].map(([k, v]) => h('div', {}, h('span', {}, k), h('b', {}, String(v)))))
         ),
-        tile('CONTROLS', 'Keyboard, gamepad & touch', 'dark', () => this.openControls()),
+        tile('CONTROLS', 'Keyboard, mouse & gamepad', 'dark', () => this.openControls()),
         tile('QUIT TO TITLE', 'Save and return to the title screen', 'dark', () => game.quitToTitle())
       )
     );
@@ -714,6 +714,7 @@ export class Menus {
       ['Handbrake', 'Space', 'A'],
       ['Shift up / down (manual)', 'E / Q', 'RB / LB'],
       ['Change camera', 'C', 'Y'],
+      ['Look around (all cameras)', 'Left mouse button + drag', '—'],
       ['Look back', 'B', 'Right stick click'],
       ['Rewind', 'R (hold)', 'X (hold)'],
       ['Reset car to road', 'T', 'Right stick button'],
@@ -732,8 +733,8 @@ export class Menus {
         'div',
         { class: 'dialog wide controls' },
         h('div', { class: 'dialog-title' }, 'CONTROLS'),
-        h('table', { class: 'controls-table' }, h('tr', {}, h('th', {}, 'Action'), h('th', {}, 'Keyboard'), h('th', {}, 'Gamepad')), rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))),
-        h('p', { class: 'muted' }, 'On phones and tablets, on-screen controls appear automatically.'),
+        h('table', { class: 'controls-table' }, h('tr', {}, h('th', {}, 'Action'), h('th', {}, 'Keyboard / Mouse'), h('th', {}, 'Gamepad')), rows.map((r) => h('tr', {}, r.map((c) => h('td', {}, c))))),
+        h('p', { class: 'muted' }, 'Drag with the left mouse button to look around in any camera. Chase views orbit around your car; hood, bumper and cockpit views look from their usual positions. After three seconds idle, the camera returns to its normal driving view.'),
         h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary focusable', onclick: () => this.openPause('festival') }, 'BACK'))
       )
     );

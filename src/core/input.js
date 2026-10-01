@@ -1,4 +1,4 @@
-// Keyboard + gamepad + touch input, merged into a single driving/menu state.
+// Keyboard + gamepad input, merged into a single driving/menu state.
 import { clamp } from './math.js';
 
 const KEYMAP = {
@@ -31,7 +31,6 @@ export class Input {
   constructor(target = window) {
     this.down = new Set();
     this.pressed = new Set();
-    this.touch = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
     this.gamepad = null;
     this.padButtons = [];
     this.padPrev = [];
@@ -126,16 +125,6 @@ export class Input {
       throttle = Math.max(throttle, rt);
       brake = Math.max(brake, lt);
       if (gp.buttons[0] && gp.buttons[0].pressed) handbrake = 1;
-    }
-    const t = this.touch;
-    if (t.throttle || t.brake || t.steer || t.handbrake) {
-      throttle = Math.max(throttle, t.throttle);
-      brake = Math.max(brake, t.brake);
-      if (Math.abs(t.steer) > 0.01) {
-        steerRaw = t.steer;
-        analog = true;
-      }
-      handbrake = Math.max(handbrake, t.handbrake);
     }
     // keyboard steering ramps in/out for smoother digital input
     if (!analog) {

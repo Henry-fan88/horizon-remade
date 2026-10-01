@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import { makeRoadTexture, makeDirtRoadMask } from './textures.js';
 import { getSurfaceAssets } from './surface-assets.js';
+import { SNOW_ROAD_LINE } from './snow-surface.js';
+import { snowReliefGLSL, snowDetailTexture } from './snow-material.js';
 
 // Lane markings follow road distance; the photographed aggregate keeps a fixed metre scale
 // instead of stretching across each road type. An aerial asphalt scan adds patches, repairs
 // and staining at a 30 m scale so long straights are not one uniform grey.
 export function makeRoadMaterial(kind) {
   const assets = getSurfaceAssets();
+  if (kind === 'snow') return addMountainSnow(makeRoadMaterial('road'));
   if (kind === 'mud') return makeMudRoadMaterial(assets?.dirt);
   if (kind === 'desert' && assets?.gravel) return makeGravelRoadMaterial(assets.gravel, true);
   if (kind === 'dirt' && assets?.gravel) return makeGravelRoadMaterial(assets.gravel);
@@ -119,14 +122,54 @@ function makeGravelRoadMaterial(gravel, desert = false) {
 }
 
 // Loose gravel shoulders beside paved roads (fades out into the verge by vertex alpha).
-export function makeShoulderMaterial() {
+export function makeShoulderMaterial(snowy = false) {
   const assets = getSurfaceAssets();
   const set = assets?.gravel || assets?.dirt;
-  return new THREE.MeshStandardMaterial({
+  const material = new THREE.MeshStandardMaterial({
     color: assets?.gravel ? 0xc7bfb0 : 0x9e9686, map: set?.map || null,
     normalMap: set?.normalMap || null, normalScale: new THREE.Vector2(0.4, 0.4),
     roughnessMap: set?.roughnessMap || null, roughness: 1,
     vertexColors: true, transparent: true, depthWrite: false,
     polygonOffset: true, polygonOffsetFactor: -0.5, polygonOffsetUnits: -1,
   });
+  return snowy ? addMountainSnow(material, true) : material;
+}
+
+function addMountainSnow(material, shoulder = false) {
+  const snow = getSurfaceAssets()?.snow;
+  const originalCompile = material.onBeforeCompile;
+  material.onBeforeCompile = (shader, renderer) => {
+    originalCompile.call(material, shader, renderer);
+    shader.uniforms.tDetail = { value: snowDetailTexture() };
+    shader.uniforms.snowScan = { value: snow?.map ?? snowDetailTexture() };
+    shader.uniforms.snowNormal = { value: snow?.normalMap ?? snowDetailTexture() };
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSnowWorld;\nvarying vec3 vSnowNormal;\nvarying vec2 vSnowRoadUv;')
+      .replace('#include <uv_vertex>', `#include <uv_vertex>
+        vSnowWorld = ( modelMatrix * vec4( position, 1.0 ) ).xyz;
+        vSnowNormal = normalize( mat3( modelMatrix ) * normal );
+        vSnowRoadUv = uv;`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        uniform sampler2D tDetail; uniform sampler2D snowScan; uniform sampler2D snowNormal;
+        varying vec3 vSnowWorld; varying vec3 vSnowNormal; varying vec2 vSnowRoadUv;
+        ${snowReliefGLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float snowCover = smoothstep( ${SNOW_ROAD_LINE.start.toFixed(1)}, ${SNOW_ROAD_LINE.end.toFixed(1)}, vSnowWorld.y );
+        vec4 snowR = snowRelief( vSnowWorld.xz, length( vSnowWorld - cameraPosition ) );
+        float packedRut = ${shoulder ? '0.0' : `exp( -pow( ( vSnowRoadUv.x - 0.156 ) * 30.0, 2.0 ) ) + exp( -pow( ( vSnowRoadUv.x - 0.344 ) * 30.0, 2.0 ) )
+          + exp( -pow( ( vSnowRoadUv.x - 0.656 ) * 30.0, 2.0 ) ) + exp( -pow( ( vSnowRoadUv.x - 0.844 ) * 30.0, 2.0 ) )`};
+        float snowGrain = dot( texture2D( snowScan, vSnowWorld.xz / 3.0 ).rgb, vec3( 0.333 ) );
+        vec3 snowColor = mix( vec3( 0.84, 0.88, 0.93 ), vec3( 0.52, 0.59, 0.67 ), packedRut * 0.72 );
+        snowColor *= snowR.z * clamp( 1.0 + ( snowGrain - 0.4 ) * 0.4, 0.85, 1.12 );
+        diffuseColor.rgb = mix( diffuseColor.rgb, snowColor, snowCover );`)
+      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
+        roughnessFactor = mix( roughnessFactor, snowR.w - packedRut * 0.1, snowCover );`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        vec2 snowN = texture2D( snowNormal, vSnowWorld.xz / 3.0 ).rg * 2.0 - 1.0;
+        vec3 snowMapped = normalize( vSnowNormal + vec3( snowN.x * 0.12 - snowR.x, 0.0, -snowN.y * 0.12 - snowR.y ) );
+        normal = normalize( mix( normal, mat3( viewMatrix ) * snowMapped, snowCover ) );`);
+  };
+  material.customProgramCacheKey = () => `mountain-snow-v1-${shoulder}`;
+  return material;
 }

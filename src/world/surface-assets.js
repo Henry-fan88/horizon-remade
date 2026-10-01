@@ -8,6 +8,7 @@ const definitions = {
   rock: { id: 'rock_face', tileSize: 2.4 },
   asphalt: { id: 'asphalt_02', tileSize: 3 },
   gravel: { id: 'gravel_road', tileSize: 2 },
+  snow: { id: 'snow_02', tileSize: 3 },
   // aerial asphalt: patches, repairs and staining at a 30 m scale over the road aggregate
   asphaltMacro: { id: 'aerial_asphalt_01', tileSize: 30, maps: ['diff'] },
 };

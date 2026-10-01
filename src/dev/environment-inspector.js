@@ -21,7 +21,7 @@ export function inspectEnvironment(game) {
     body:has(#environment-inspector) #ui{visibility:hidden}
     #environment-inspector{position:fixed;z-index:150;left:24px;top:24px;color:#eef1ef;background:#17201eee;backdrop-filter:blur(12px);border:1px solid #ffffff24;border-radius:12px;padding:16px 18px;font:13px/1.4 Barlow,system-ui;max-width:calc(100vw - 48px);box-shadow:0 12px 45px #0003}
     #environment-inspector strong{font-size:18px;font-weight:600;display:block;letter-spacing:.04em}
-    #environment-inspector.compact nav,#environment-inspector.compact footer,#environment-inspector.compact strong,#environment-inspector.compact p,#environment-inspector.compact .sand-study{display:none}
+    #environment-inspector.compact nav,#environment-inspector.compact footer,#environment-inspector.compact strong,#environment-inspector.compact p,#environment-inspector.compact .sand-study,#environment-inspector.compact .snow-study{display:none!important}
     #environment-inspector.compact{padding:7px}
     #environment-inspector [data-toggle]{float:right;margin-left:14px}
     #environment-inspector p{margin:5px 0 12px;color:#bac7c2}
@@ -98,6 +98,30 @@ export function inspectEnvironment(game) {
     }
     views['Cactus detail'] = { drive: sandSpot || views.Desert.drive, target: [x, y + scale * 2.1, z], camera: [cameraX, Math.max(y + scale * 2.9, h(cameraX, cameraZ) + 1.3), cameraZ] };
   }
+  const pass = game.world.network.roads.find(r => r.name === 'Paso Nevado');
+  let snowSpot = views.Snow.drive, snowStraight = Infinity;
+  for (let s = pass.length * 0.76; s < pass.length * 0.95; s += 8) {
+    const p = pass.pointAt(s, {});
+    const curvature = Math.abs(pass.curvatureAt(s, 24));
+    if (game.world.surfaceAt(p.x, p.z) === SURF.SNOW && curvature < snowStraight) {
+      snowStraight = curvature; snowSpot = [p.x, p.z, Math.atan2(p.tx, p.tz)];
+    }
+  }
+  const [sx, sz, sh] = snowSpot;
+  views['Snow detail'] = { drive: snowSpot,
+    target: [sx + Math.sin(sh) * 3, h(sx, sz) + 0.1, sz + Math.cos(sh) * 3],
+    camera: [sx + Math.cos(sh) * 3.2 - Math.sin(sh) * 5, h(sx, sz) + 1.1, sz - Math.sin(sh) * 3.2 - Math.cos(sh) * 5] };
+  const snowPines = game.world.data.veg.pineSnow;
+  let tree = -1, treeDistance = Infinity;
+  for (let i = 0; i < snowPines.length; i += 5) {
+    const distance = Math.hypot(snowPines[i] - sx, snowPines[i + 2] - sz);
+    if (distance > 14 && distance < treeDistance) { tree = i; treeDistance = distance; }
+  }
+  if (tree >= 0) {
+    const x = snowPines[tree], y = snowPines[tree + 1], z = snowPines[tree + 2], scale = snowPines[tree + 3];
+    const a = Math.atan2(sx - x, sz - z), cx = x + Math.sin(a) * scale * 20, cz = z + Math.cos(a) * scale * 20;
+    views['Snow forest'] = { drive: snowSpot, target: [x, y + scale * 6, z], camera: [cx, Math.max(h(cx, cz) + 2.0, y + scale * 5.2), cz] };
+  }
   const citySpawn=roadView('Market Street',.46,0,3.2);
   views.City = { target: [1110, h(1110,170)+55, 170], camera: [550,210,690], drive: citySpawn.drive };
   views['City streets'] = citySpawn;
@@ -120,9 +144,10 @@ export function inspectEnvironment(game) {
     camera: [cx - ox * 12 - Math.sin(heading) * 24, h(cx, cz) + 11, cz - oz * 12 - Math.cos(heading) * 24],
     target: [cx + ox * 160, 1.5, cz + oz * 160],
   };
-  let selected, active = true, sandStudy;
+  let selected, active = true, sandStudy, snowStudy;
   function show(name) {
     sandStudy?.reset();
+    snowStudy?.reset();
     selected = views[name];
     game.player.place(...selected.drive);
     game.camera.position.fromArray(selected.camera);
@@ -138,6 +163,7 @@ export function inspectEnvironment(game) {
   }
   panel.querySelector('select').addEventListener('change', e => game.env.setMode(e.target.value));
   panel.querySelector('[data-drive]').addEventListener('click', () => {
+    snowStudy?.dispose();
     sandStudy?.dispose();
     active = false; controls.dispose(); panel.remove();
     game.inspectionFocus = null;
@@ -160,8 +186,11 @@ export function inspectEnvironment(game) {
   const requestedView = new URLSearchParams(location.search).get('view');
   show(views[requestedView] ? requestedView : 'Festival'); requestAnimationFrame(frame);
   if (sandSpot && new URLSearchParams(location.search).has('capture')) {
-    import('./sand-inspector.js').then(({ installSandStudy }) => {
-      if (active) sandStudy = installSandStudy(game, panel, controls, sandSpot);
+    Promise.all([import('./sand-inspector.js'), import('./snow-inspector.js')]).then(([{ installSandStudy }, { installSnowStudy }]) => {
+      if (active) {
+        sandStudy = installSandStudy(game, panel, controls, sandSpot);
+        snowStudy = installSnowStudy(game, panel, controls, snowSpot);
+      }
     });
   }
 }

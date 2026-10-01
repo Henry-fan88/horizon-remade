@@ -47,6 +47,13 @@ body {
   outline: none;
 }
 
+#game-canvas.camera-look {
+  cursor: grab;
+}
+#game-canvas.camera-dragging {
+  cursor: grabbing;
+}
+
 #ui {
   position: absolute;
   inset: 0;
@@ -1390,6 +1397,11 @@ kbd {
 .toggle:focus {
   box-shadow: 0 0 0 3px #fff;
 }
+.dialog.controls {
+  margin: auto;
+  max-height: calc(100% - 48px);
+  overflow-y: auto;
+}
 .controls-table {
   width: 100%;
   border-collapse: collapse;
@@ -1894,142 +1906,4 @@ kbd {
   letter-spacing: 0.2em;
   color: #9fd4ff;
   text-shadow: 0 0 20px rgba(40, 140, 255, 0.9);
-}
-
-/* ------------------------------------------------------------------ touch */
-.touch {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-}
-.touch * {
-  pointer-events: auto;
-  touch-action: none;
-}
-.t-steer {
-  position: absolute;
-  left: 20px;
-  bottom: 20px;
-  width: 44vw;
-  max-width: 340px;
-  height: 130px;
-  border-radius: 65px;
-  background: rgba(10, 10, 18, 0.35);
-  border: 2px solid rgba(255, 255, 255, 0.25);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-.t-steer span {
-  position: absolute;
-  bottom: 8px;
-  font: 700 11px var(--font);
-  letter-spacing: 0.2em;
-  color: rgba(255, 255, 255, 0.5);
-}
-.t-knob {
-  width: 76px;
-  height: 76px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.85);
-  box-shadow: 0 0 20px rgba(255, 45, 135, 0.6);
-  transition: transform 0.05s;
-}
-.t-btn {
-  position: absolute;
-  border-radius: 18px;
-  background: rgba(10, 10, 18, 0.45);
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  font: 800 16px var(--font-cond);
-  letter-spacing: 0.1em;
-}
-.t-btn.on {
-  background: var(--pink);
-}
-.t-gas {
-  right: 22px;
-  bottom: 30px;
-  width: 110px;
-  height: 150px;
-}
-.t-brake {
-  right: 146px;
-  bottom: 30px;
-  width: 96px;
-  height: 110px;
-}
-.t-hb {
-  right: 146px;
-  bottom: 152px;
-  width: 96px;
-  height: 56px;
-  font-size: 13px;
-}
-.t-top {
-  position: absolute;
-  top: 12px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 8px;
-}
-.t-small {
-  padding: 8px 12px;
-  border-radius: 10px;
-  background: rgba(10, 10, 18, 0.55);
-  font: 700 13px var(--font);
-}
-body.touch-mode .speedo {
-  right: auto;
-  left: 50%;
-  bottom: 0;
-  transform: translateX(-50%) scale(0.6);
-  transform-origin: bottom center;
-}
-body.touch-mode .top-right {
-  top: 58px;
-}
-body.touch-mode .skill-chain {
-  top: 64px;
-  transform: translateX(-50%) scale(0.75);
-}
-.rotate-hint {
-  position: absolute;
-  inset: 0;
-  display: none;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 14px;
-  background: rgba(8, 8, 14, 0.92);
-  font-family: var(--font-cond);
-  font-weight: 700;
-  font-size: 22px;
-  letter-spacing: 0.08em;
-  text-align: center;
-  pointer-events: auto;
-  z-index: 50;
-}
-.rotate-hint i {
-  font-style: normal;
-  font-size: 54px;
-  animation: rot 2s ease-in-out infinite;
-}
-@keyframes rot {
-  50% { transform: rotate(90deg); }
-}
-.rotate-hint button {
-  margin-top: 8px;
-  padding: 8px 18px;
-  background: rgba(255, 255, 255, 0.15);
-  font: 700 14px var(--font);
-  letter-spacing: 0.1em;
-}
-@media (orientation: portrait) {
-  body.touch-mode .rotate-hint:not(.dismissed) {
-    display: flex;
-  }
-}
-body.touch-mode .minimap {
-  display: none;
 }

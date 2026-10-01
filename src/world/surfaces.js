@@ -1,6 +1,7 @@
 // Per-surface tyre grip, rolling roughness and dust colours. Kept free of DOM and
 // three.js imports so the vehicle physics can also run in Node benches.
 import { SURF } from './worldgen.js';
+import { clamp, lerp } from '../core/math.js';
 
 // Grip multipliers per surface: [asphalt-tyre grip, off-road penalty weight]
 export const SURFACE_INFO = {
@@ -17,8 +18,16 @@ export const SURFACE_INFO = {
   [SURF.DIRTROAD]: { grip: 0.8, rough: 0.2, dust: [0.6, 0.5, 0.38], name: 'gravel', offroad: true },
   [SURF.PAVE]: { grip: 0.96, rough: 0.02, dust: [0.8, 0.8, 0.8], name: 'pavement', offroad: false },
   [SURF.VERGE]: { grip: 0.85, rough: 0.15, dust: [0.6, 0.55, 0.45], name: 'verge', offroad: true },
-  [SURF.SNOW]: { grip: 0.55, rough: 0.35, dust: [0.93, 0.95, 0.98], name: 'snow', offroad: true },
+  // Game tune for packed snow: gentler lateral bite and a lower sliding peak.
+  // Off-road capability grants a small tread advantage, never dirt's asphalt boost.
+  [SURF.SNOW]: { grip: 0.34, rough: 0.16, dust: [0.93, 0.96, 1], name: 'snow', offroad: true,
+    longitudinal: 1.07, cornerStiffness: 5.8, cornerShape: 1.35, lockedGrip: 0.68, slideLoss: 0.24 },
   // circuit gravel traps slow a car hard; kerbs grip like asphalt but drum under the tyres
   [SURF.GRAVEL]: { grip: 0.55, rough: 2.0, dust: [0.78, 0.73, 0.62], name: 'gravel trap', offroad: true },
   [SURF.KERB]: { grip: 0.94, rough: 0.12, dust: [0.8, 0.8, 0.8], name: 'kerb', offroad: false, rumble: true },
 };
+
+export function tireSurfaceGrip(surface, spec) {
+  if (surface.name === 'snow') return surface.grip + 0.05 * clamp(spec.offroad ?? 0.3, 0, 1);
+  return surface.offroad ? lerp(surface.grip, Math.max(surface.grip, 0.93), spec.offroad ?? 0.3) : surface.grip;
+}

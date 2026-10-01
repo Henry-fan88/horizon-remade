@@ -1,6 +1,7 @@
 // World orchestrator: runs generation in a worker, builds terrain / water / roads /
 // vegetation / props, and answers physics queries (height, normal, surface).
 import * as THREE from 'three';
+import { roadSurfaceAt, isSnowRoad } from './snow-surface.js';
 import { WORLD } from '../config.js';
 import { HeightField } from './heightfield.js';
 import { SURF } from './worldgen.js';
@@ -104,7 +105,7 @@ export class World {
       const hw = near.road.width / 2;
       // circuit kerbs: the last metre of the track and a little beyond on marked corners
       if (near.road.kerb && near.dist > hw - 1.1 && near.dist < hw + 0.35 && near.road.kerbAt(near.i) & (near.lateral > 0 ? 2 : 1)) return SURF.KERB;
-      if (near.dist < hw + 0.25) return near.road.surface ?? (near.road.kind === 'dirt' ? SURF.DIRTROAD : SURF.ROAD);
+      if (near.dist < hw + 0.25) return roadSurfaceAt(near.road, isSnowRoad(near.road) ? this.height(x, z) : 0);
     }
     const S = WORLD.res + 1;
     const ix = Math.max(0, Math.min(WORLD.res, Math.round((x + this.half) / this.hf.cell)));

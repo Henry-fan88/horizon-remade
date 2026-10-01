@@ -7,6 +7,7 @@ import { RoadNetwork } from '../src/world/roadnet.js';
 import { World } from '../src/world/world.js';
 import { CITY, cityLayout, cityStreetLife, footprintsOverlap, footprintDistance, cityDestinations, districtDestinations, forestMask, duneMask, mudMask } from '../src/world/districts.js';
 import { SURFACE_INFO } from '../src/world/surfaces.js';
+import { roadSnowCoverage } from '../src/world/snow-surface.js';
 import { VehiclePhysics } from '../src/vehicle/vehiclephysics.js';
 import { CARS } from '../src/vehicle/carspecs.js';
 import { buildEvents } from '../src/game/events.js';
@@ -98,6 +99,21 @@ test('the wetland tyre query agrees with the painted road and has lower grip', (
   assert.equal(world.surfaceAt(d.x, d.z), SURF.MUD);
   assert.ok(SURFACE_INFO[SURF.MUD].grip < SURFACE_INFO[SURF.DIRTROAD].grip);
   assert.ok(SURFACE_INFO[SURF.MUD].offroad);
+});
+
+test('upper Paso Nevado has snow traction where its road cover is snowy; low roads stay dry', () => {
+  const pass = world.network.roads.find(r => r.name === 'Paso Nevado');
+  for (const fraction of [0.1, 0.3, 0.5, 0.8, 0.87, 0.95]) {
+    const p = pass.pointAt(pass.length * fraction, {}), height = world.height(p.x, p.z);
+    const snowy = roadSnowCoverage(height) >= 0.5;
+    assert.equal(world.surfaceAt(p.x, p.z), snowy ? SURF.SNOW : SURF.ROAD);
+  }
+  const snow = destinations.find(d => d.id === 'snow');
+  assert.equal(world.surfaceAt(snow.x, snow.z), SURF.SNOW);
+  for (const d of destinations.filter(d => !['snow', 'mud', 'desert'].includes(d.id))) {
+    const road = world.network.roads.find(r => r.name === d.road);
+    assert.equal(world.surfaceAt(d.x, d.z), road.surface ?? (road.kind === 'dirt' ? SURF.DIRTROAD : SURF.ROAD));
+  }
 });
 
 test('new routes and city streets have finite profiles without abrupt grade changes', () => {

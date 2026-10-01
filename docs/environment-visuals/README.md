@@ -63,3 +63,44 @@ confirmed `vehiclephysics.js`, `worldgen.js` and `heightfield.js` unchanged.
 
 Screenshots: [sand tire reaction](desert-sand-reaction.jpg) and
 [rebuilt cacti](desert-cacti.jpg).
+
+## Snow update — 2026-10-01
+
+- Snow conifers now have three seeded silhouettes, bent woody limbs, green needle
+  sprays underneath, and rounded, uneven snow caps above each bough. The distant
+  LOD retains the same branch skeleton with fewer than 2,200 triangles per tree.
+- The local snow PBR scan now blends fine granular normals, filtered grain detail,
+  wind-packed relief, and powder/compaction roughness. This changes shading only;
+  the original terrain vertices, heightfield and road profiles remain unchanged.
+- Upper **Paso Nevado** gains visible packed snow and four compressed wheel paths.
+  Cover transitions from 145–185 m elevation; above its 165 m midpoint, the same
+  road is classified as snow by the wheel-contact query. Lower roads stay dry.
+- Snow tyre grip is tuned independently from dirt: a 0.34 surface multiplier, at
+  most a 0.05 tread bonus, gentler lateral force buildup, less longitudinal grip,
+  and greater force loss during wheelspin or locked braking. Stability control
+  respects the available contact grip; ABS and traction control remain usable.
+  These values are game tuning, not measured real-world tyre coefficients.
+- Tyres throw white powder and small snow chunks, and leave soft blue tread
+  impressions. Chunks settle on the ground; tracks follow the terrain and road
+  ribbon, break at contact/teleport gaps, and fade. Fixed pools limit chunks to
+  2,400 and tread segments to 3,600. Snow cover also lowers opponents' speed
+  profiles and extends their braking approach. Respawns refresh tyre surfaces.
+- The development tour adds **Snow detail** and **Snow forest**. With `&capture`,
+  **Snow launch**, **Snow slide**, and **Snow braking** simulate real wheel contacts
+  and freeze their effects for inspection. **Drive here** restores free roam.
+
+Validation: production build and 28 automated checks passed, including snow
+braking/turning/launches, all player cars on mixed snow/asphalt, surface changes on
+respawn, AI approach speeds, effect pool limits, snowy pine LODs, and existing
+environment/desert regressions. At 80 km/h on flat ground the Ferrari stopped in
+18.7 m on asphalt, 67.2 m on snow with ABS, and 94.9 m with locked wheels. Six
+asphalt acceleration/braking/steering runs matched the pre-update body-state
+snapshots exactly. `worldgen.js` and `heightfield.js` retain their original hashes.
+
+Live WebGL checks covered launch, braking and sliding on the generated mountain
+road, conifers at daylight/golden hour/night, and restoration of normal driving.
+The 2.4-second slide recorded 576 snow tyre contacts, about 2,059 chunks, and 572
+tread segments. Emission counts vary with randomness. The clean final browser
+session had no warnings or errors.
+
+Screenshots: [snow area](snow-area.jpg) and [snow tire reaction](snow-tire-reaction.jpg).

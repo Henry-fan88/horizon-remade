@@ -5,6 +5,7 @@ import { Road, RoadNetwork } from './roadnet.js';
 import { RIBBON_LIFT } from './roadprofile.js';
 import { useFarShadow } from '../render/farshadow.js';
 import { SURF } from './worldgen.js';
+import { isSnowRoad } from './snow-surface.js';
 
 export { Road, RoadNetwork };
 
@@ -50,6 +51,7 @@ export function buildRoadMeshes(network, hf) {
   group.name = 'roads';
   const mats = {};
   const shoulderMaterial = useFarShadow(makeShoulderMaterial());
+  const snowyShoulderMaterial = useFarShadow(makeShoulderMaterial(true));
   const matFor = (kind) => (mats[kind] ||= useFarShadow(makeRoadMaterial(kind)));
   const g = { gx: 0, gz: 0 };
   const nv = { x: 0, y: 1, z: 0 };
@@ -86,7 +88,7 @@ export function buildRoadMeshes(network, hf) {
       }
     }
     for (let row0 = 0; row0 < rows - 1; row0 += CHUNK_ROWS) {
-      const look = r.surface === SURF.MUD ? 'mud' : ['Dunas Trail', 'Cañón Rojo Rally'].includes(r.name) ? 'desert' : r.kind;
+      const look = isSnowRoad(r) ? 'snow' : r.surface === SURF.MUD ? 'mud' : ['Dunas Trail', 'Cañón Rojo Rally'].includes(r.name) ? 'desert' : r.kind;
       const mesh = new THREE.Mesh(chunkGeometry(pos, nrm, uv, null, cols, row0, Math.min(rows - 1, row0 + CHUNK_ROWS)), matFor(look));
       mesh.receiveShadow = true;
       mesh.name = `road:${r.name}:${row0 / CHUNK_ROWS}`;
@@ -122,7 +124,7 @@ export function buildRoadMeshes(network, hf) {
           }
         }
         for (let row0 = 0; row0 < rows - 1; row0 += CHUNK_ROWS) {
-          const shoulder = new THREE.Mesh(chunkGeometry(vp, vn, vu, vc, 2, row0, Math.min(rows - 1, row0 + CHUNK_ROWS), side === -1), shoulderMaterial);
+          const shoulder = new THREE.Mesh(chunkGeometry(vp, vn, vu, vc, 2, row0, Math.min(rows - 1, row0 + CHUNK_ROWS), side === -1), isSnowRoad(r) ? snowyShoulderMaterial : shoulderMaterial);
           shoulder.receiveShadow = true;
           shoulder.name = `verge:${r.name}:${side}:${row0 / CHUNK_ROWS}`;
           shoulder.matrixAutoUpdate = false;

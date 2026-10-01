@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { clamp, lerp } from '../core/math.js';
 import { torqueCurve } from './carspecs.js';
-import { SURFACE_INFO } from '../world/surfaces.js';
+import { SURFACE_INFO, tireSurfaceGrip } from '../world/surfaces.js';
 import { WORLD } from '../config.js';
 
 const G = 9.81;
@@ -141,6 +141,7 @@ export class VehiclePhysics {
     this.upsideTimer = 0;
     this.bottomOut = 0;
     this.gripMul = 1;
+    this.snowGrip = 1;
     this.powerMul = 1;
     this.frozen = false;
     this.bodyContacts = 0;
@@ -199,9 +200,11 @@ export class VehiclePhysics {
     for (const w of this.wheels) {
       w.compression = w.prevCompression = (this.mass * G) / 4 / w.k;
       w.omega = 0;
+      w.surfTimer = 0; // a respawn must query its new snow/asphalt contacts immediately
     }
     this.rpm = this.spec.idle || 0;
     this.gear = 1;
+    this.snowGrip = 1;
     this.upsideTimer = 0;
     this.airTime = 0;
     const wt = this.water;
@@ -416,14 +419,14 @@ export class VehiclePhysics {
       const vch = 24; // characteristic speed of a mildly understeering car
       let rDes = (-vf * Math.tan(this.steerAngle)) / s.style.WB / (1 + (vf / vch) * (vf / vch));
       // the most the tyres can turn the car, including what the wings press down at speed
-      const rMax = (0.95 * s.grip * (G + (0.5 * RHO * s.ClA * vf * vf) / this.mass)) / vf;
+      const rMax = ((0.95 * s.grip * (G + (0.5 * RHO * s.ClA * vf * vf) / this.mass)) / vf) * this.snowGrip;
       rDes = clamp(rDes, -rMax, rMax);
       const yawRate = this.angVel.dot(_up);
       const err = yawRate - rDes;
       const over = Math.max(0, Math.abs(err) - 0.14) + 2 * Math.max(0, Math.abs(beta) - 0.09);
       if (over > 0) {
         this.aid.esc = Math.min(1, over * 3);
-        escYaw = -Math.sign(err) * Math.min(1, over / 0.3) * this.mass * 3.2;
+        escYaw = -Math.sign(err) * Math.min(1, over / 0.3) * this.mass * 3.2 * this.snowGrip;
         throttle *= clamp(1 - over * 2.5, 0.15, 1);
       }
     }
@@ -559,12 +562,12 @@ export class VehiclePhysics {
     const handbrake = inp.handbrake;
     let absWork = 0,
       tcWork = 0;
+    let snowLoad = 0, totalLoad = 0;
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i];
       if (!w.contact) continue;
       const surf = SURFACE_INFO[w.surface] || SURFACE_INFO[0];
-      // offroad-capable vehicles lose less grip on dirt
-      const offK = surf.offroad ? lerp(surf.grip, Math.max(surf.grip, 0.93), s.offroad ?? 0.3) : surf.grip;
+      const offK = tireSurfaceGrip(surf, s);
       const Fs = w.Fs;
       _F.copy(_up).multiplyScalar(Fs);
       this.applyForceAt(_F, w.point);
@@ -582,18 +585,20 @@ export class VehiclePhysics {
       w.vLong = vLong;
       w.vLat = vLat;
       const Fz = Math.min(Fs, this.mass * G * 1.2);
+      totalLoad += Fz;
+      snowLoad += Fz * (surf.name === 'snow' ? offK : 1);
       const loadK = 1 - 0.12 * (Fz / ((this.mass * G) / 4) - 1);
       // standing water under the tyre: less grip as it gets deeper (aquaplaning)
       const wet = this.seaLevel - w.point.y;
       const wetK = wet > 0 ? 1 - 0.55 * Math.min(1, wet / 0.45) : 1;
       const mu = s.grip * offK * this.gripMul * wetK * clamp(loadK, 0.75, 1.15);
       const maxF = mu * Fz;
-      const maxFx = maxF * 1.32; // tyres grip harder longitudinally than laterally
+      const maxFx = maxF * (surf.longitudinal ?? 1.32);
       // lateral force from the slip angle (simplified magic formula)
       const alpha = Math.atan2(vLat, Math.abs(vLong) + 0.6);
       w.slipAngle = alpha;
-      const B = 10.5,
-        C = 1.45;
+      const B = surf.cornerStiffness ?? 10.5,
+        C = surf.cornerShape ?? 1.45;
       let Fy = -Fz * mu * Math.sin(C * Math.atan(B * alpha));
       // longitudinal: drive, brakes, rolling resistance
       let driveShare = 0;
@@ -619,7 +624,7 @@ export class VehiclePhysics {
       if (locked && Math.hypot(vLong, vLat) > 0.3) {
         // a locked tyre slides: its friction opposes the contact patch's velocity
         const vm = Math.hypot(vLong, vLat);
-        const slide = mu * Fz * 0.82;
+        const slide = mu * Fz * (surf.lockedGrip ?? 0.82);
         Fx = (-vLong / vm) * slide;
         Fy = (-vLat / vm) * slide;
       } else {
@@ -643,7 +648,7 @@ export class VehiclePhysics {
         const m2 = ux * ux + uy * uy;
         if (m2 > 1) {
           const mag = Math.sqrt(m2);
-          const k = (1 - 0.1 * Math.min(1, mag - 1)) / mag;
+          const k = (1 - (surf.slideLoss ?? 0.1) * Math.min(1, mag - 1)) / mag;
           if (driveF !== 0 && Math.abs(ux) > 0.2) spinning = Math.min(1, (mag - 1) * Math.abs(ux) / mag * 1.5);
           Fx *= k;
           Fy *= k;
@@ -665,6 +670,8 @@ export class VehiclePhysics {
       else w.omega = target;
     }
     this.grounded = grounded;
+    // ESC has only the grip available at the tyres, including split snow/asphalt.
+    this.snowGrip = totalLoad > 0 ? snowLoad / totalLoad : 1;
     this.aid.abs = absWork;
     this.aid.tcs = tcWork;
     this.offroadFactor = grounded ? offroad / grounded : this.offroadFactor;

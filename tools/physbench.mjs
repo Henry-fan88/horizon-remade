@@ -11,6 +11,7 @@ import { SURF } from '../src/world/worldgen.js';
 import { VehiclePhysics } from '../src/vehicle/vehiclephysics.js';
 import { CARS, CAR_BY_ID } from '../src/vehicle/carspecs.js';
 import { WORLD } from '../src/config.js';
+import { roadSurfaceAt, isSnowRoad } from '../src/world/snow-surface.js';
 
 const args = process.argv.slice(2);
 const mode = args[0] || 'roads';
@@ -61,7 +62,7 @@ async function islandWorld() {
         },
     surfaceAt(x, z) {
       const r = network.nearest(x, z, 24, null, near);
-      if (r && r.dist < r.road.width / 2 + 0.25) return r.road.surface ?? (r.road.kind === 'dirt' ? SURF.DIRTROAD : SURF.ROAD);
+      if (r && r.dist < r.road.width / 2 + 0.25) return roadSurfaceAt(r.road, isSnowRoad(r.road) ? hf.sampleSmooth(x, z, null) : 0);
       const S = WORLD.res + 1;
       const ix = Math.max(0, Math.min(WORLD.res, Math.round((x + hf.half) / hf.cell)));
       const iz = Math.max(0, Math.min(WORLD.res, Math.round((z + hf.half) / hf.cell)));

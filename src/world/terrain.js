@@ -5,6 +5,7 @@ import { getSurfaceAssets, getTerrainArrays, TERRAIN_LAYERS } from './surface-as
 import { SURF } from './worldgen.js';
 import { useFarShadow } from '../render/farshadow.js';
 import { sandReliefGLSL } from './sand-material.js';
+import { snowReliefGLSL } from './snow-material.js';
 
 const CHUNK = 64;
 const STEPS = [1, 2, 4, 8];
@@ -195,6 +196,7 @@ varying vec3 vTPos;
 varying vec3 vTNrm;
 const vec3 terrainLuma = vec3( 0.2126, 0.7152, 0.0722 );
 ${sandReliefGLSL}
+${snowReliefGLSL}
 
 // Albedo without visible repeats: two copies at area-dependent offsets are blended where
 // a low-frequency noise changes its index (after Inigo Quilez, "texture repetition").
@@ -253,6 +255,7 @@ tTint *= 0.93 + ( tMacro.r - 0.5 ) * 0.2 + ( tMacro2.g - 0.5 ) * 0.16;
 // coverage of each layer
 float wRock = max( mG.r, smoothstep( 0.22, 0.43, tSlope + ( tNoise.r - 0.5 ) * 0.065 ) );
 float wSnow = mC.r * ( 1.0 - smoothstep( 0.55, 0.8, tSlope ) );
+vec4 tSnowRelief = wSnow > 0.004 ? snowRelief( vTPos.xz, tDist ) : vec4( 0.0, 0.0, 1.0, 0.94 );
 float wPave = mG.b;
 float wSand = mG.g * ( 1.0 - wPave );
 vec3 tSandRelief = wSand > 0.004 ? sandRelief( vTPos.xz, tDist ) : vec3( 0.0, 0.0, 1.0 );
@@ -302,11 +305,23 @@ if ( tFar < 0.99 ) {
       vec3 grainColor = alb.rgb / max( layerMean[ li ], vec3( 0.001 ) );
       c = tTint * vec3( 1.04, 1.005, 0.94 ) * clamp( vec3( 1.0 ) + ( grainColor - 1.0 ) * 0.18, vec3( 0.84 ), vec3( 1.13 ) );
     }
+    if ( L == L_SNOW ) {
+      vec3 scanDetail = alb.rgb / max( layerMean[ li ], vec3( 0.001 ) );
+      c = vec3( 0.84, 0.88, 0.93 ) * clamp( vec3( 1.0 ) + ( scanDetail - 1.0 ) * 0.42, vec3( 0.78 ), vec3( 1.12 ) );
+      alb.a = tSnowRelief.w;
+      // A second, centimetre-scale normal sample resolves granular powder up close.
+      vec2 crystalUv = uv * 9.2 + vec2( 0.37, 0.71 );
+      float crystalSize = max( length( dFdx( crystalUv ) ), length( dFdy( crystalUv ) ) );
+      float crystalFade = tNear * ( 1.0 - smoothstep( 0.1, 0.5, crystalSize ) );
+      vec2 crystalNormal = texture( tLayerNormal, vec3( crystalUv, L ) ).rg;
+      nh.rg = mix( nh.rg, crystalNormal, 0.46 * crystalFade );
+    }
     float b = k == 0 ? 1.0 : heightBlend( a, nh.b );
     col = mix( col, c, b );
     tRough = mix( tRough, alb.a, b );
     vec2 nxy = nh.rg * 2.0 - 1.0; // B holds height, so rebuild the normal's z
     if ( L == L_SAND ) nxy *= 0.14;
+    if ( L == L_SNOW ) nxy *= 0.38;
     tNsum = mix( tNsum, vec3( nxy, sqrt( max( 0.0, 1.0 - dot( nxy, nxy ) ) ) ), b );
     tNw = max( tNw, b );
   }
@@ -345,6 +360,7 @@ if ( tFar < 0.99 ) {
   tAlbedo = mix( col, tTint, tFar );
 }
 tAlbedo *= mix( 1.0, tSandRelief.z, wSand );
+tAlbedo *= mix( 1.0, tSnowRelief.z, wSnow );
 tAlbedo *= mix( 1.0, 0.63, tWet );
 vec4 diffuseColor = vec4( tAlbedo, opacity );`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
@@ -358,10 +374,11 @@ if ( tFine > 0.001 && tFar < 0.99 ) {
   mapped = normalize( mix( mapped, tRockN, tRockW ) );
   mapped = normalize( mix( tN0, mapped, tFine ) );
   mapped = normalize( mapped + vec3( -tSandRelief.x, 0.0, -tSandRelief.y ) * wSand );
+  mapped = normalize( mapped + vec3( -tSnowRelief.x, 0.0, -tSnowRelief.y ) * wSnow );
   normal = normalize( mat3( viewMatrix ) * mapped );
 }`);
   };
-  mat.customProgramCacheKey = () => 'terrain-layered-sand-v4';
+  mat.customProgramCacheKey = () => 'terrain-layered-snow-v5';
   return mat;
 }
 

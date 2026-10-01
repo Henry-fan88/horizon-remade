@@ -9,6 +9,7 @@ import { getSurfaceAssets } from './surface-assets.js';
 import { atmo } from './sky.js';
 import { useFarShadow } from '../render/farshadow.js';
 import { buildCactus, makeCactusMaterials } from './cactus.js';
+import { buildSnowPine, makeBranchSnowMaterial } from './snow-pine.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -383,7 +384,7 @@ const SPECIES = {
   broadleaf: { variants: 3, range: 1500, near: 170, shadow: true, collide: 0.42 },
   birch: { variants: 2, range: 1300, near: 170, shadow: true, collide: 0.3 },
   pine: { variants: 2, range: 1600, near: 170, shadow: true, collide: 0.4 },
-  pineSnow: { variants: 2, range: 1600, near: 170, shadow: true, collide: .4 },
+  pineSnow: { variants: 3, range: 1600, near: 150, shadow: true, collide: .4 },
   palm: { variants: 3, range: 1300, near: 170, shadow: true, collide: 0.3 },
   bush: { variants: 2, range: 420, near: 90, shadow: false, collide: 0 },
   cactus: { variants: 3, range: 700, near: 120, shadow: true, collide: 0.35 },
@@ -400,24 +401,6 @@ export class Vegetation {
     const leafBirch = makeFoliageTexture('birch');
     const leafPine = makeFoliageTexture('pine');
     const leafPalm = makeFoliageTexture('palm');
-    // Keep the branch texture and its alpha silhouette, add accumulated snow to the
-    // needles instead of replacing the detailed trees with white cone primitives.
-    const snowImage = (source) => {
-      const data = source.data.slice();
-      for (let i = 0; i < data.length; i += 4) {
-        data[i] = data[i] * .13 + 230 * .87;
-        data[i + 1] = data[i + 1] * .13 + 239 * .87;
-        data[i + 2] = data[i + 2] * .13 + 243 * .87;
-      }
-      return { data, width: source.width, height: source.height };
-    };
-    const snowy = snowImage(leafPine.image);
-    const leafSnow = new THREE.DataTexture(snowy.data, snowy.width, snowy.height, THREE.RGBAFormat);
-    leafSnow.mipmaps = leafPine.mipmaps.map(snowImage);
-    leafSnow.colorSpace = leafPine.colorSpace;
-    leafSnow.minFilter = leafPine.minFilter; leafSnow.magFilter = leafPine.magFilter;
-    leafSnow.anisotropy = leafPine.anisotropy;
-    leafSnow.needsUpdate = true;
     const barkOak = makeFoliageBark('oak');
     const barkBirch = makeFoliageBark('birch');
     const barkPalm = makeFoliageBark('palm');
@@ -430,20 +413,21 @@ export class Vegetation {
     this.materials = {
       broadleaf: [barkMat(barkOak), leafMat(leafBroad, 0xffffff, 0.018)],
       birch: [barkMat(barkBirch), leafMat(leafBirch, 0xf4f1da, 0.024)],
-      pineSnow: [barkMat(barkOak), leafMat(leafSnow, 0xffffff, .006)],
+      pineSnow: [barkMat(barkOak), leafMat(leafPine, 0xddebe6, 0.003), makeBranchSnowMaterial(getSurfaceAssets()?.snow)],
       pine: [barkMat(barkOak), leafMat(leafPine, 0xffffff, 0.012)],
       palm: [barkMat(barkPalm), leafMat(leafPalm, 0xffffff, 0.035)],
       bush: [barkMat(barkOak), leafMat(leafBroad, 0xe5e2c4, 0.02)],
       cactus: makeCactusMaterials(),
       rock: rockMaterial(),
     };
+    this.materials.pineSnow[0].vertexColors = this.materials.pineSnow[1].vertexColors = true;
     // distant mountains and forests shade the trees too
     for (const m of Object.values(this.materials)) for (const x of Array.isArray(m) ? m : [m]) useFarShadow(x);
     const builders = {
       broadleaf: (s, l) => buildBroadleaf(s, false, l),
       birch: (s, l) => buildBroadleaf(s, true, l),
       pine: buildPine,
-      pineSnow: buildPine,
+      pineSnow: buildSnowPine,
       palm: buildPalm,
       bush: buildBush,
       cactus: buildCactus,
@@ -550,6 +534,7 @@ export class Vegetation {
         const variation = (Math.sin(x * 1.73 + z * 2.31) + 1) * 0.5;
         // boulders on the red-rock canyon island take its sandstone colour
         if (key === 'rock' && x < -1880) _tint.setRGB(1.0, 0.64 + variation * 0.08, 0.46 + variation * 0.06);
+        else if (key === 'pineSnow') _tint.setRGB(0.94 + variation * 0.06, 0.96 + variation * 0.04, 1);
         else _tint.setRGB(0.85 + variation * 0.15, 0.89 + variation * 0.11, 0.8 + variation * 0.18);
         if (d2 < near2) { mesh.setMatrixAt(c, _m); mesh.setColorAt(c++, _tint); }
         else { far.setMatrixAt(cf, _m); far.setColorAt(cf++, _tint); }
