@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { getSurfaceAssets, getTerrainArrays, TERRAIN_LAYERS } from './surface-assets.js';
 import { SURF } from './worldgen.js';
 import { useFarShadow } from '../render/farshadow.js';
+import { sandReliefGLSL } from './sand-material.js';
 
 const CHUNK = 64;
 const STEPS = [1, 2, 4, 8];
@@ -193,6 +194,7 @@ varying vec4 vTColor;
 varying vec3 vTPos;
 varying vec3 vTNrm;
 const vec3 terrainLuma = vec3( 0.2126, 0.7152, 0.0722 );
+${sandReliefGLSL}
 
 // Albedo without visible repeats: two copies at area-dependent offsets are blended where
 // a low-frequency noise changes its index (after Inigo Quilez, "texture repetition").
@@ -253,6 +255,7 @@ float wRock = max( mG.r, smoothstep( 0.22, 0.43, tSlope + ( tNoise.r - 0.5 ) * 0
 float wSnow = mC.r * ( 1.0 - smoothstep( 0.55, 0.8, tSlope ) );
 float wPave = mG.b;
 float wSand = mG.g * ( 1.0 - wPave );
+vec3 tSandRelief = wSand > 0.004 ? sandRelief( vTPos.xz, tDist ) : vec3( 0.0, 0.0, 1.0 );
 wRock *= 1.0 - max( wPave, max( wSand, wSnow ) );
 float wGravel = mC.a * ( 1.0 - wPave ) * ( 1.0 - wRock );
 float wGrass = smoothstep( 0.12, 0.82, vTColor.a + ( tNoise.g - 0.5 ) * 0.24 ) * ( 1.0 - max( mG.a, max( wSand, wPave ) ) ) * ( 1.0 - wGravel );
@@ -293,10 +296,17 @@ if ( tFar < 0.99 ) {
     vec3 tintK = tTint;
     if ( L == L_SOIL ) tintK = mix( tTint, vec3( 0.15, 0.105, 0.058 ), vTColor.a * 0.5 );
     vec3 c = gradeLayer( alb.rgb, li, tintK );
+    if ( L == L_SAND ) {
+      // The scan includes compacted clods/footprints. Loose dune sand retains a
+      // little of its variation while wind relief supplies the visible structure.
+      vec3 grainColor = alb.rgb / max( layerMean[ li ], vec3( 0.001 ) );
+      c = tTint * vec3( 1.04, 1.005, 0.94 ) * clamp( vec3( 1.0 ) + ( grainColor - 1.0 ) * 0.18, vec3( 0.84 ), vec3( 1.13 ) );
+    }
     float b = k == 0 ? 1.0 : heightBlend( a, nh.b );
     col = mix( col, c, b );
     tRough = mix( tRough, alb.a, b );
     vec2 nxy = nh.rg * 2.0 - 1.0; // B holds height, so rebuild the normal's z
+    if ( L == L_SAND ) nxy *= 0.14;
     tNsum = mix( tNsum, vec3( nxy, sqrt( max( 0.0, 1.0 - dot( nxy, nxy ) ) ) ), b );
     tNw = max( tNw, b );
   }
@@ -334,10 +344,12 @@ if ( tFar < 0.99 ) {
   }
   tAlbedo = mix( col, tTint, tFar );
 }
+tAlbedo *= mix( 1.0, tSandRelief.z, wSand );
 tAlbedo *= mix( 1.0, 0.63, tWet );
 vec4 diffuseColor = vec4( tAlbedo, opacity );`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
 roughnessFactor = mix( clamp( tRough, 0.55, 0.99 ), 0.93, tFar );
+roughnessFactor = mix( roughnessFactor, 0.96, wSand );
 roughnessFactor = mix( roughnessFactor, mix( 0.45, 0.4, mR.a ), tWet );`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
 if ( tFine > 0.001 && tFar < 0.99 ) {
@@ -345,10 +357,11 @@ if ( tFine > 0.001 && tFar < 0.99 ) {
   vec3 mapped = normalize( mix( tN0, planar, tNw ) );
   mapped = normalize( mix( mapped, tRockN, tRockW ) );
   mapped = normalize( mix( tN0, mapped, tFine ) );
+  mapped = normalize( mapped + vec3( -tSandRelief.x, 0.0, -tSandRelief.y ) * wSand );
   normal = normalize( mat3( viewMatrix ) * mapped );
 }`);
   };
-  mat.customProgramCacheKey = () => 'terrain-layered-v3';
+  mat.customProgramCacheKey = () => 'terrain-layered-sand-v4';
   return mat;
 }
 
@@ -411,6 +424,7 @@ varying vec3 vTPos;
 varying vec3 vTNrm;
 
 const vec3 terrainLuma = vec3( 0.2126, 0.7152, 0.0722 );
+${sandReliefGLSL}
 
 vec3 terrainTriplanar( sampler2D tex, vec2 uvX, vec2 uvY, vec2 uvZ, vec3 weights ) {
   return texture2D( tex, uvX ).rgb * weights.x
@@ -457,6 +471,7 @@ vec4 terrainNoise = texture2D( tDetail, vTPos.xz * 0.071 );
 float terrainSlope = 1.0 - max( 0.0, terrainBaseNormal.y );
 float terrainPave = terrainBiome.b;
 float terrainSand = terrainBiome.g;
+vec3 terrainSandRelief = terrainSand > 0.004 ? sandRelief( vTPos.xz, terrainDistance ) : vec3( 0.0, 0.0, 1.0 );
 float terrainRock = max( terrainBiome.r, smoothstep( 0.22, 0.43, terrainSlope + ( terrainNoise.r - 0.5 ) * 0.065 ) );
 terrainRock *= 1.0 - max( terrainPave, terrainSand );
 float terrainGrass = smoothstep( 0.12, 0.82, vTColor.a + ( terrainNoise.g - 0.5 ) * 0.24 );
@@ -485,6 +500,7 @@ vec3 terrainSoilColor = terrainDetailColor( terrainSoilSample, vec3( 0.125, 0.08
 // Beach sand keeps its pale regional color; shrink and soften the soil scan so
 // it reads as grains, rather than full-size pebbles repeated over the shoreline.
 terrainSoilColor = mix( terrainSoilColor, terrainTint * ( 0.82 + dot( terrainSoilSample, terrainLuma ) * 1.75 ), terrainSand * 0.6 );
+terrainSoilColor = mix( terrainSoilColor, terrainTint * vec3( 1.04, 1.005, 0.94 ) * ( 0.96 + terrainMacro.g * 0.08 ), terrainSand );
 vec3 terrainAlbedo = terrainSoilColor;
 if ( terrainGrass > 0.005 ) {
   vec3 grassScan = texture2D( tGrassMap, terrainGrassUV ).rgb;
@@ -508,6 +524,7 @@ if ( terrainPave > 0.005 ) {
   terrainPaveColor *= mix( 1.0, paveDetail, 0.68 ) * paveWear;
 }
 terrainAlbedo = mix( terrainAlbedo, terrainPaveColor, terrainPave );
+terrainAlbedo *= mix( 1.0, terrainSandRelief.z, terrainSand * ( 1.0 - terrainPave ) );
 terrainAlbedo *= mix( 1.0, 0.63, terrainWet );
 vec4 diffuseColor = vec4( terrainAlbedo, opacity );`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
@@ -522,7 +539,7 @@ if ( terrainFine > 0.001 ) {
   }
 }
 roughnessFactor = mix( 0.93, terrainRoughness, terrainFine );
-roughnessFactor = mix( roughnessFactor, 0.91, terrainSand );
+roughnessFactor = mix( roughnessFactor, 0.96, terrainSand );
 roughnessFactor = mix( roughnessFactor, 0.88, terrainPave );
 roughnessFactor = mix( roughnessFactor, 0.46, terrainWet );`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
@@ -535,10 +552,11 @@ if ( terrainFine > 0.001 && terrainPave < 0.995 ) {
     mappedNormal = normalize( mix( mappedNormal, rockNormal, terrainRock ) );
   }
   mappedNormal = normalize( mix( terrainBaseNormal, mappedNormal, terrainFine * ( 1.0 - terrainPave ) ) );
+  mappedNormal = normalize( mappedNormal + vec3( -terrainSandRelief.x, 0.0, -terrainSandRelief.y ) * terrainSand * ( 1.0 - terrainPave ) );
   normal = normalize( mat3( viewMatrix ) * mappedNormal );
 }`);
   };
-  mat.customProgramCacheKey = () => 'terrain-pbr-v2';
+  mat.customProgramCacheKey = () => 'terrain-pbr-sand-v3';
   return mat;
 }
 

@@ -34,3 +34,32 @@ progression or vehicle tuning.
 
 This is a visual/material and dressing update to the existing procedural island.
 It does not replace the island's terrain geometry or driving simulation.
+
+## Desert update — 2026-10-01
+
+- Loose sand now uses metre-scaled, derivative-filtered wind ripples and fine grain
+  detail; the original sand scan's compacted clumps are reduced. Relief changes
+  shading only, preserving the terrain geometry and driving surface.
+- Each grounded sand tire throws individual grains and dust according to speed,
+  steering, slip and wheelspin. Grains fall, bounce and settle on the rendered
+  dune surface. Paved or airborne tires do not emit sand.
+- Sand tires leave feathered impressions with tread detail and small raised edges.
+  Marks follow the terrain, break at contact/surface gaps and teleports, and fade
+  after 55–95 seconds. Fixed pools cap grains at 6,000 and tread segments at 3,600.
+- Cacti have three seeded silhouettes, swept curved arms, ribbed/tapered stems,
+  rounded tips, textured skin, basal weathering and close-up spine clusters.
+  Distant LODs retain the silhouette and skin while omitting modelled spines.
+- The development environment tour adds **Sand detail** and **Cactus detail**.
+  With `&capture`, acceleration/slide/reverse checks step the real physics and
+  freeze the resulting visual effects. **Drive here** restores normal gameplay.
+
+Validation: production build and 15 automated checks passed (six sand/cactus
+regressions and nine existing environment checks). Live WebGL checks covered
+acceleration, steering/slip, reverse, cactus detail, daylight/golden-hour/night,
+and return to free roam. The four-second slide check emitted 3,828 grains and
+created 599 tread segments; emission counts vary slightly with randomness.
+No warnings/errors appeared in the clean final browser session. SHA-256 checks
+confirmed `vehiclephysics.js`, `worldgen.js` and `heightfield.js` unchanged.
+
+Screenshots: [sand tire reaction](desert-sand-reaction.jpg) and
+[rebuilt cacti](desert-cacti.jpg).

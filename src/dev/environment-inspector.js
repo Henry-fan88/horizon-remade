@@ -3,6 +3,7 @@
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { getSurfaceAssets } from '../world/surface-assets.js';
 import { districtDestinations, CITY } from '../world/districts.js';
+import { SURF } from '../world/worldgen.js';
 
 export function inspectEnvironment(game) {
   game.menus.close(); game.hud.show(false);
@@ -20,11 +21,12 @@ export function inspectEnvironment(game) {
     body:has(#environment-inspector) #ui{visibility:hidden}
     #environment-inspector{position:fixed;z-index:150;left:24px;top:24px;color:#eef1ef;background:#17201eee;backdrop-filter:blur(12px);border:1px solid #ffffff24;border-radius:12px;padding:16px 18px;font:13px/1.4 Barlow,system-ui;max-width:calc(100vw - 48px);box-shadow:0 12px 45px #0003}
     #environment-inspector strong{font-size:18px;font-weight:600;display:block;letter-spacing:.04em}
-    #environment-inspector.compact nav,#environment-inspector.compact footer,#environment-inspector.compact strong,#environment-inspector.compact p{display:none}
+    #environment-inspector.compact nav,#environment-inspector.compact footer,#environment-inspector.compact strong,#environment-inspector.compact p,#environment-inspector.compact .sand-study{display:none}
     #environment-inspector.compact{padding:7px}
     #environment-inspector [data-toggle]{float:right;margin-left:14px}
     #environment-inspector p{margin:5px 0 12px;color:#bac7c2}
     #environment-inspector nav{display:flex;gap:6px;flex-wrap:wrap}
+    #environment-inspector .sand-study{display:flex}
     #environment-inspector button,#environment-inspector select{font:inherit;color:inherit;border:1px solid #ffffff38;border-radius:5px;background:#ffffff08;padding:7px 11px;cursor:pointer}
     #environment-inspector button[aria-pressed=true]{background:#d8e4dc;color:#17201e}
     #environment-inspector footer{display:flex;gap:14px;align-items:center;margin-top:12px}
@@ -58,6 +60,44 @@ export function inspectEnvironment(game) {
   for (const d of districtDestinations(game.world.network)) {
     views[districtViews[d.id]] = roadView(d.road, d.fraction, d.id === 'forest' ? 0 : 12, d.id === 'forest' ? 3.5 : 7);
   }
+  // Tyre-level sand and botanical close-ups use the actual generated scenery.
+  const [dx, dz, dh] = views.Desert.drive;
+  let sandSpot;
+  for (const side of [1, -1]) {
+    for (let offset = 22; offset <= 130 && !sandSpot; offset += 12) {
+      const x = dx + Math.cos(dh) * offset * side, z = dz - Math.sin(dh) * offset * side;
+      const slope = Math.hypot(h(x + 1, z) - h(x - 1, z), h(x, z + 1) - h(x, z - 1)) / 2;
+      if (game.world.surfaceAt(x, z) === SURF.SAND && slope < 0.15 && h(x, z) > 3 &&
+          game.world.vegetation.colliders.every(c => Math.hypot(c.x - x, c.z - z) > c.r + 5)) sandSpot = [x, z, dh];
+    }
+  }
+  if (sandSpot) {
+    const [x, z] = sandSpot;
+    views['Sand detail'] = { drive: sandSpot, target: [x, h(x, z) + 0.12, z], camera: [x + 5.5, h(x + 5.5, z + 7) + 1.45, z + 7] };
+  }
+  const cacti = game.world.data.veg.cactus;
+  let nearestCactus = -1, nearestDistance = Infinity;
+  for (let i = 0; i < cacti.length; i += 5) {
+    const distance = Math.hypot(cacti[i] - dx, cacti[i + 2] - dz);
+    if (distance < nearestDistance) { nearestCactus = i; nearestDistance = distance; }
+  }
+  if (nearestCactus >= 0) {
+    const x = cacti[nearestCactus], y = cacti[nearestCactus + 1], z = cacti[nearestCactus + 2], scale = cacti[nearestCactus + 3];
+    // Choose a clear approach so a neighbouring plant does not obscure the specimen.
+    let cameraX, cameraZ, clearance = -Infinity;
+    for (let k = 0; k < 12; k++) {
+      const a = k * Math.PI / 6, cx = x + Math.cos(a) * scale * 11, cz = z + Math.sin(a) * scale * 11;
+      let nearest = 20;
+      for (let i = 0; i < cacti.length; i += 5) {
+        if (i === nearestCactus) continue;
+        const t = ((cacti[i] - x) * (cx - x) + (cacti[i + 2] - z) * (cz - z)) / (scale * 11) ** 2;
+        if (t <= 0 || t >= 1.1) continue;
+        nearest = Math.min(nearest, Math.hypot(cacti[i] - (x + (cx - x) * t), cacti[i + 2] - (z + (cz - z) * t)) - cacti[i + 3] * 1.3);
+      }
+      if (nearest > clearance) { clearance = nearest; cameraX = cx; cameraZ = cz; }
+    }
+    views['Cactus detail'] = { drive: sandSpot || views.Desert.drive, target: [x, y + scale * 2.1, z], camera: [cameraX, Math.max(y + scale * 2.9, h(cameraX, cameraZ) + 1.3), cameraZ] };
+  }
   const citySpawn=roadView('Market Street',.46,0,3.2);
   views.City = { target: [1110, h(1110,170)+55, 170], camera: [550,210,690], drive: citySpawn.drive };
   views['City streets'] = citySpawn;
@@ -80,8 +120,9 @@ export function inspectEnvironment(game) {
     camera: [cx - ox * 12 - Math.sin(heading) * 24, h(cx, cz) + 11, cz - oz * 12 - Math.cos(heading) * 24],
     target: [cx + ox * 160, 1.5, cz + oz * 160],
   };
-  let selected, active = true;
+  let selected, active = true, sandStudy;
   function show(name) {
+    sandStudy?.reset();
     selected = views[name];
     game.player.place(...selected.drive);
     game.camera.position.fromArray(selected.camera);
@@ -97,6 +138,7 @@ export function inspectEnvironment(game) {
   }
   panel.querySelector('select').addEventListener('change', e => game.env.setMode(e.target.value));
   panel.querySelector('[data-drive]').addEventListener('click', () => {
+    sandStudy?.dispose();
     active = false; controls.dispose(); panel.remove();
     game.inspectionFocus = null;
     game.vehicles.forEach(v => { v.root.visible = true; });
@@ -117,4 +159,9 @@ export function inspectEnvironment(game) {
   }
   const requestedView = new URLSearchParams(location.search).get('view');
   show(views[requestedView] ? requestedView : 'Festival'); requestAnimationFrame(frame);
+  if (sandSpot && new URLSearchParams(location.search).has('capture')) {
+    import('./sand-inspector.js').then(({ installSandStudy }) => {
+      if (active) sandStudy = installSandStudy(game, panel, controls, sandSpot);
+    });
+  }
 }

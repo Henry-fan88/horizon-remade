@@ -8,6 +8,7 @@ import { makeFoliageTexture, makeFoliageBark } from './foliage-textures.js';
 import { getSurfaceAssets } from './surface-assets.js';
 import { atmo } from './sky.js';
 import { useFarShadow } from '../render/farshadow.js';
+import { buildCactus, makeCactusMaterials } from './cactus.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -277,27 +278,6 @@ function buildBush(seed, lod = 0) {
   return withGroups(mergeGeometries(stems), cl);
 }
 
-function buildCactus(seed, lod = 0) {
-  void lod;
-  const rnd = mulberry32(seed);
-  const parts = [];
-  const body = new THREE.CapsuleGeometry(0.28, 3.6, 4, 10);
-  body.translate(0, 2.0, 0);
-  parts.push(stripAttrs(body));
-  for (let k = 0; k < 2; k++) {
-    const side = k ? 1 : -1;
-    const h = 1.0 + rnd() * 0.8;
-    const arm = new THREE.CapsuleGeometry(0.2, h, 4, 8);
-    arm.translate(side * 0.62, 1.8 + rnd() * 0.8 + h / 2, 0);
-    const conn = new THREE.CylinderGeometry(0.19, 0.19, 0.62, 8);
-    conn.rotateZ(Math.PI / 2);
-    conn.translate(side * 0.32, 1.7 + rnd() * 0.3, 0);
-    parts.push(stripAttrs(arm), stripAttrs(conn));
-  }
-  const g = mergeGeometries(parts.map((p) => (p.index ? p.toNonIndexed() : p)));
-  return g;
-}
-
 function buildRock(seed, lod = 0) {
   const rnd = mulberry32(seed);
   const g = new THREE.IcosahedronGeometry(1, lod ? 1 : 2);
@@ -406,7 +386,7 @@ const SPECIES = {
   pineSnow: { variants: 2, range: 1600, near: 170, shadow: true, collide: .4 },
   palm: { variants: 3, range: 1300, near: 170, shadow: true, collide: 0.3 },
   bush: { variants: 2, range: 420, near: 90, shadow: false, collide: 0 },
-  cactus: { variants: 2, range: 700, near: 120, shadow: true, collide: 0.35 },
+  cactus: { variants: 3, range: 700, near: 120, shadow: true, collide: 0.35 },
   rock: { variants: 3, range: 1400, near: 150, shadow: true, collide: 1.0 },
 };
 
@@ -454,7 +434,7 @@ export class Vegetation {
       pine: [barkMat(barkOak), leafMat(leafPine, 0xffffff, 0.012)],
       palm: [barkMat(barkPalm), leafMat(leafPalm, 0xffffff, 0.035)],
       bush: [barkMat(barkOak), leafMat(leafBroad, 0xe5e2c4, 0.02)],
-      cactus: new THREE.MeshStandardMaterial({ color: 0x4f7a3a, roughness: 0.7 }),
+      cactus: makeCactusMaterials(),
       rock: rockMaterial(),
     };
     // distant mountains and forests shade the trees too

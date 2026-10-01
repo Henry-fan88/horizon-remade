@@ -140,7 +140,7 @@ export class Game {
     this.hud = new HUD(this.ui, this.mapImages);
     this.gameCam = new GameCamera(this.camera);
     this.gameCam.mode = Number(this.settings.camera) || 0;
-    this.effects = new Effects(this.scene);
+    this.effects = new Effects(this.scene, this.world);
     this.audio = new AudioEngine();
     this.radio = new Radio(this.audio);
     this.radio.onTrack = (title, artist) => this.hud.toast('HORIZON PULSE', `Now playing: ${artist} — ${title}`, 'purple', 4500);
@@ -799,7 +799,7 @@ export class Game {
     this._probeT = (this._probeT || 0) + dt;
     if (probe.ready && this._probeT < perFace) return;
     this._probeT = 0;
-    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, ...this.markers.map((m) => m.obj)];
+    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, this.effects.sand.group, ...this.markers.map((m) => m.obj)];
     const hide = this._probeList || (this._probeList = []);
     hide.length = 0;
     for (const o of this._probeHide) hide.push(o);

@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { makeSmokeTexture } from '../world/textures.js';
 import { fogUniforms } from '../world/sky.js';
 import { SURFACE_INFO } from '../world/surfaces.js';
+import { SandEffects } from './sand-effects.js';
 
 const TYRE_SMOKE = [0.86, 0.86, 0.88];
 const DUST_RATE = { dirt: 1, gravel: 1, sand: 1, dry: 0.8, ash: 0.8, field: 0.55, rock: 0.4, verge: 0.4, grass: 0.18, forest: 0.25 };
@@ -215,12 +216,14 @@ class SkidMarks {
 
 // ------------------------------------------------------------------ manager
 export class Effects {
-  constructor(scene) {
+  constructor(scene, world) {
     const smokeTex = makeSmokeTexture();
     this.smoke = new ParticlePool(smokeTex, THREE.NormalBlending);
     this.sparks = new ParticlePool(makeSparkTexture(), THREE.AdditiveBlending, false);
     this.skids = new SkidMarks();
+    this.sand = new SandEffects(world, this.smoke);
     scene.add(this.smoke.mesh, this.sparks.mesh, this.skids.mesh);
+    scene.add(this.sand.group);
     this.light = 1;
     this._r = new THREE.Vector3();
     this._f = new THREE.Vector3();
@@ -236,9 +239,16 @@ export class Effects {
       const key = v.root.id * 4 + i;
       if (!w.contact) {
         this.skids.lift(key);
+        this.sand.lift(key);
         continue;
       }
       const surf = SURFACE_INFO[w.surface] || SURFACE_INFO[0];
+      if (surf.name === 'sand') {
+        this.skids.lift(key);
+        this.sand.wheel(v, w, i, dt, intensity);
+        continue;
+      }
+      this.sand.lift(key);
       const slip = w.slip;
       const paved = !surf.offroad || surf.name === 'verge';
       // skid marks on asphalt when sliding; ruts on dirt always
@@ -314,6 +324,7 @@ export class Effects {
   update(dt, lightLevel) {
     this.smoke.update(dt, lightLevel);
     this.sparks.update(dt, 3);
+    this.sand.update(dt, lightLevel);
   }
 }
 
