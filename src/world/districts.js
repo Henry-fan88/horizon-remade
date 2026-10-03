@@ -42,8 +42,8 @@ export const mudMask = (x, z) => 1 - smoothstep(0.55, 1.05, Math.hypot((x + 785)
 
 export const DISTRICTS = [
   { id: 'city', name: 'San Francisco', label: 'City by the bay', road: 'Market Street', fraction: .46, description: 'Hilly neighborhoods, Victorian homes, Chinatown shops, downtown towers and a curved waterfront. A San Francisco-inspired drive.' },
-  { id: 'desert', name: 'Dunas Doradas', label: 'Desert', road: 'Dunas Trail', fraction: .54, description: 'Golden sand dunes, cactus scrub and red sandstone mesas on the western island.' },
-  { id: 'forest', name: 'Bosque Verde', label: 'Forest', road: 'Selva Trail', fraction: .35, description: 'A winding dirt trail beneath a dense mixed woodland canopy.' },
+  { id: 'desert', name: 'Dunas Doradas', label: 'Desert', road: 'Dunas Trail', fraction: .54, description: 'Golden sand dunes, cactus scrub and red sandstone mesas in the west of the island.' },
+  { id: 'forest', name: 'Bosque Verde', label: 'Forest', road: 'Selva Trail', fraction: .25, description: 'A winding dirt trail beneath a dense mixed woodland canopy.' },
   { id: 'rural', name: 'Valle de las Granjas', label: 'Rural countryside', road: 'Granja Road', fraction: .36, description: 'Patchwork farmland, barns, silos and quiet country lanes.' },
   { id: 'snow', name: 'Sierra Nevada', label: 'Snow', road: 'Paso Nevado', fraction: .87, description: 'Snowy pine forests, mountain chalets and a high switchback road.' },
   { id: 'mud', name: 'Marisma del Lago', label: 'Mud & wetlands', road: 'Marisma Trail', fraction: .49, description: 'A slippery lakeside mud trail with puddles, reeds and wet woodland.' },
@@ -64,7 +64,7 @@ export function cityDestinations(network) {
     ['chinatown','Chinatown','Grant Avenue',.42,'Lantern gateways, grocery stores, bakeries and dim sum shops.'],
     ['lombard','Lombard Street','Lombard Street',.17,'A winding hillside street above the bay.'],
     ['waterfront','Embarcadero & Ferry Building','Embarcadero',.4,'Bay views, a waterfront promenade and the ferry clock tower.'],
-    ['bay-bridge','Golden Gate-inspired crossing','Puente Este',.5,'A red suspension bridge along the eastern island crossing.'],
+    ['bay-bridge','Golden Gate-inspired crossing','Puente Este',.5,'A red suspension landmark on the road through the eastern lowlands.'],
   ].map(([id,name,roadName,fraction,description])=>{
     const road=network.roads.find(r=>r.name===roadName),p=road.pointAt(road.length*fraction,{});
     return {id,name,road:roadName,fraction,description,label:'San Francisco',x:p.x,y:p.y,z:p.z,tx:p.tx,tz:p.tz,heading:Math.atan2(p.tx,p.tz)};
@@ -77,6 +77,7 @@ export function clearFootprint(network, x, z, w, d, margin = 4, yaw = 0) {
   const nx = Math.max(1,Math.ceil(w / 4)), nz = Math.max(1,Math.ceil(d / 4)), c = Math.cos(yaw), s = Math.sin(yaw);
   for (let iz = 0; iz <= nz; iz++) for (let ix = 0; ix <= nx; ix++) {
     const u = -w/2+w*ix/nx, v = -d/2+d*iz/nz;
+    if (network.junctions.at(x+c*u+s*v, z-s*u+c*v, margin)) return false;
     const near = network.nearest(x+c*u+s*v, z-s*u+c*v, 45);
     if (near && near.dist < near.road.width / 2 + margin) return false;
   }

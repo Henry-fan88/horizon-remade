@@ -166,7 +166,7 @@ function roundRect(g, x, y, w, h, r) {
 }
 
 // ---------------------------------------------------------------- icons
-const ICON_COLORS = { race: PALETTE.pink, circuit: PALETTE.pink, sprint: PALETTE.pink, dirt: '#e0a040', drift: PALETTE.purple, speed: PALETTE.cyan, zone: PALETTE.cyan, jump: PALETTE.orange, festival: PALETTE.pink, board: PALETTE.orange, player: '#ffffff', online: '#48f0a0', viewpoint: '#ffffff', drag: PALETTE.yellow };
+const ICON_COLORS = { race: PALETTE.pink, circuit: PALETTE.pink, sprint: PALETTE.pink, dirt: '#e0a040', drift: PALETTE.purple, speed: PALETTE.cyan, zone: PALETTE.cyan, jump: PALETTE.orange, festival: PALETTE.pink, board: PALETTE.orange, player: '#ffffff', online: '#48f0a0', viewpoint: '#ffffff', camera: '#f3dca1', drag: PALETTE.yellow };
 export function drawIcon(g, type, x, y, s = 1, color = null) {
   g.save();
   g.translate(x, y);
@@ -233,6 +233,19 @@ export function drawIcon(g, type, x, y, s = 1, color = null) {
       g.arc(0, 2, 5.5, Math.PI, 0);
       g.fill();
       g.fillRect(-7, 3, 14, 1.8);
+      break;
+    case 'camera':
+      roundRect(g, -6, -3, 12, 8, 1.2);
+      g.stroke();
+      g.beginPath();
+      g.moveTo(-3, -3);
+      g.lineTo(-2, -5);
+      g.lineTo(2, -5);
+      g.lineTo(3, -3);
+      g.stroke();
+      g.beginPath();
+      g.arc(0, 1, 2.3, 0, Math.PI * 2);
+      g.stroke();
       break;
     case 'viewpoint':
       g.beginPath();

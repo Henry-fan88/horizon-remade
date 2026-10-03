@@ -5,7 +5,7 @@ It has a volcanic island, a road network, a festival hub, skill chains, races ag
 PR stunts, traffic, Wheelspins, a garage, and **online multiplayer** where drivers share the world
 and can race each other.
 
-The islands, roads, trees, buildings, engine sounds and radio are generated in code. Ground and road materials combine locally bundled **CC0 photographic textures**
+The island, roads, trees, buildings, engine sounds and radio are generated in code. Ground and road materials combine locally bundled **CC0 photographic textures**
 with procedural detail; see [surface attribution](public/environment/surfaces/ATTRIBUTION.md).
 Seven cars use detailed, attributed real-car models: **Ferrari 458 Italia**, **Ford Mustang Shelby GT500**, **Porsche 911 GT3**, **1967 Ford Mustang Fastback**, plus the 2023 **McLaren MCL60**, **Ferrari SF23**, and **Red Bull RB19** Formula 1 cars. The Ferrari 458 is by **vicent091036** and the three modern F1 models are by **Redgrund**,
 and all seven assets are licensed under **CC BY 4.0**, with locally bundled assets, automotive materials, and animated
@@ -85,20 +85,23 @@ seconds without drag movement, the camera smoothly returns to its normal driving
 
 ## Features
 
-- **Open world (6 × 6 km):** three outer islands reached by causeways — *Sierra Nevada*
+- **One continuous island (6 × 6 km world):** broad wooded lowlands join every environment — *Sierra Nevada*
   (snowy peaks, six-hairpin Paso Nevado), the *Autódromo Horizonte* circuit (kerbs, gravel
   traps, tyre walls, grandstands, pit building, start lights) and *Cañón Rojo* (red-rock
   canyon rally loop). Five new races: Autódromo Grand Prix, Paso Nevado Hillclimb and
-  Descent, Cañón Rojo Rally and the Tres Islas Grand Tour.
-- **Main island:** 16 km² with a volcano and crater plume, beaches, a lake, jungle, farm
+  Descent, Cañón Rojo Rally and the Isla Grand Tour. The circuit has a road connection through its paddock and pit entrance.
+- **Island interior:** a volcano and crater plume, beaches, a lake, jungle, farm
   fields, a dry east, a San Francisco-inspired city, an airfield and a lighthouse. Roads are routed with A*
   pathfinding and carved into the terrain, including a spiral road up the volcano.
+  Junctions use shared, rounded pavement with continuous outer edge lines and clear approaches;
+  road paint, crosswalks, bridge rails and roadside props follow those same junction boundaries.
+  Lowland terrain, ground materials and vegetation blend gradually into each district.
 - **Six environments to explore:** the San Francisco-inspired city has 347 rotated building lots,
   including Victorian hillside houses, Chinatown shops, North Beach storefronts, downtown towers,
   SoMa mixed-use blocks and an open Embarcadero promenade. Eighteen streets follow different neighborhood
   alignments, with diagonal Market/Columbus avenues, Lombard bends and real hills. Landmark
   interpretations include a pyramid tower, rounded downtown tower, Coit-style lookout, Ferry
-  Building and a red suspension bridge on the eastern causeway. This is a compact playable
+  Building and a red suspension bridge on the eastern lowland road. This is a compact playable
   adaptation, not a surveyed street-for-street reconstruction.
   The city includes 193 shops, cafe seating, produce displays, lanterns, crossings, benches,
   parking meters, street trees, hydrants, 168 parked civilian vehicles, 240 animated pedestrians,
@@ -110,20 +113,26 @@ seconds without drag movement, the camera smoothly returns to its normal driving
   has snowy pines, chalets and snowbanks along the pass; Marisma del Lago has a connected mud
   trail, wet soil, puddles, reeds and reduced tyre grip. Open **M → Explore the island** to
   select an environment, set a route or fast travel there.
+- **Scenic photo spots:** eight gold camera icons mark the volcano panorama, snowy pass,
+  red canyon, dunes, lake, suspension bridge, Lombard curves and lighthouse bay. Select one
+  on the world map (**M**) for viewing directions, a GPS route or fast travel. Nearby spots
+  also appear on the minimap, and all eight are listed under **Explore the island**.
 - **Visuals:** a physically based sky with clouds, stars and moon, a dynamic day/night cycle,
   height-based aerial-perspective fog, sun shadows, bloom, ACES tone mapping, colour grading, speed
   blur, water with depth-tinted shallows and shoreline foam, instanced forests with wind sway,
   tyre smoke, dust and skid marks.
 - **Driving:** 120 Hz rigid-body physics with raycast suspension, slip-based tyres, weight
   transfer, turbo lag, an automatic or manual gearbox, handbrake drifts, and aero drag and
-  downforce. Assists: steering/counter-steer, traction control and ABS.
+  downforce. Assisted steering limits cornering demand to the grip at the tyres, so heading and
+  travel follow the same curve. Stability control arrests excess yaw instead of forcing rotation
+  into an understeering slide. Snow and loose ground still turn wider; handbrake drifts and raw
+  steering remain available. Assists: steering/counter-steer, traction control and ABS.
 - **Seven real cars**, all licensed models (Ferrari 458, Shelby GT500, Porsche 911 GT3, '67
   Mustang Fastback, and the 2023 McLaren MCL60, Ferrari SF23 and Red Bull RB19 with synthesized V6 turbo sound), with performance
   index classes, stats, paint, finish and rim colours (the F1 cars keep their original liveries).
   AI racers use these garage models; single-seaters race other single-seaters, and ambient traffic uses its own civilian fleet. Press **C** to reach the **Cockpit** camera: the
   steering wheel turns, the Fastback has a built '67 cabin with working gauges.
-  The 458 uses the existing GT driving setup: handling, suspension, collision dimensions and
-  progression are unchanged. Its displayed performance figures describe the game's tuning.
+  The 458 uses the GT driving setup, with the shared handling improvements applied to all seven cars. Its displayed performance figures describe the game's tuning.
 - **Horizon-style gameplay:** skill chains (drift, air, speed, near miss, wrecker, drafting,
   burnout, trade paint) with multipliers, and eight races (circuits, sprints, dirt, drag) with
   Drivatar-style AI, checkpoints and a colour-coded driving line. PR stunts (speed traps, speed
@@ -178,8 +187,8 @@ multiplayer server.
 - **Engine sounds:** profiles in `src/core/engine-profiles.js` (firing order, pipe length,
   resonances, intake, crackle). `node tools/enginebench.mjs` renders each one to WAV plus a
   spectrogram in `/tmp/enginebench`.
-- **World:** the islands are generated from `WORLD.seed` in `src/config.js`; the outer islands,
-  causeways and authored road layouts (pass, circuit, canyon loop) live in `src/world/regions.js`
+- **World:** the island is generated from `WORLD.seed` in `src/config.js`; the district footprints,
+  broad lowland connections and authored road layouts (pass, circuit, canyon loop) live in `src/world/regions.js`
   and the circuit's barriers, stands and buildings in `src/world/circuit-props.js`.
   `node tools/mapdebug.mjs` renders a top-down preview image and prints road statistics
   (`CROP="x0,z0,x1,z1"` renders one area with contour lines).
@@ -188,8 +197,12 @@ multiplayer server.
   District definitions and shared building lots live in `src/world/districts.js`; their instanced
   architecture and landmarks are in `src/world/city-props.js` and `src/world/district-props.js`;
   animated pedestrians and parked cars live in `src/game/citylife.js`. `node --test tools/environment.test.mjs`
-  checks road connections, rotated building clearance, sidewalk/parking placement, smooth hillside
+  checks broad land connectivity, road and circuit connections, rotated building clearance, sidewalk/parking placement, smooth hillside
   junctions, the rebuilt street race, biome coverage, mud grip and driving from all six environments.
+  `node --test tools/handling.test.mjs` checks actual turning trajectories for all seven cars across
+  eight surfaces, both steering directions, reverse, countersteering, handbrake slides and unloaded tyres.
+  `node --test tools/junctions.test.mjs` checks rounded turns, closed-road seams, skew intersections,
+  non-overlapping pavement triangulation, ribbon clipping and smooth terrain joins.
   In development, open `/?environment&view=City` to inspect the actual city, desert, forest,
   rural area, snow and mud (plus the existing festival, coast and highlands), orbit each scene,
   and compare daylight/golden hour/night. **Drive here**

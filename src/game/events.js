@@ -370,7 +370,7 @@ export function buildEvents(world) {
   // Runway drag
   races.push({ id: 'drag', name: 'Runway Drag', type: 'drag', series: 'Drag Racing', laps: 1, closed: false, pts: piece(runway, 0, runway.length), ai: 1, desc: 'Head to head down the airfield runway.' });
 
-  // ---------------------------------------------------------------- outer islands
+  // ---------------------------------------------------------------- island districts
   const track = net.roads.find((r) => r.kind === 'track');
   const pass = roadByName(net, 'Paso Nevado');
   const puenteN = roadByName(net, 'Puente Norte');
@@ -394,18 +394,17 @@ export function buildEvents(world) {
     const pts = [...piece(track, s0, track.length), ...piece(track, 0, s0)];
     races.push({ id: 'autodromo', name: 'Autódromo Grand Prix', type: 'circuit', series: 'Road Racing', laps: 3, closed: true, pts, ai: 7, venue: 'autodromo', desc: 'Three laps of the 4.4 km Autódromo Horizonte: kerbs, gravel traps and a packed grandstand.' });
   }
-  // Paso Nevado: over the north causeway and up six hairpins to the saddle, and back down
+  // Paso Nevado: through the northern foothills and up six hairpins to the saddle.
   if (pass && puenteN) {
-    races.push({ id: 'nevado-up', name: 'Paso Nevado Hillclimb', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: [...piece(puenteN, 0, puenteN.length), ...piece(pass, 0, pass.length)], ai: 7, desc: 'Across the north causeway and up the switchbacks to the snow line.' });
-    races.push({ id: 'nevado-down', name: 'Paso Nevado Descent', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: [...piece(pass, pass.length, 0), ...piece(puenteN, puenteN.length, 0)], ai: 7, desc: 'Brake hard: six hairpins down the mountain and back over the causeway.' });
+    races.push({ id: 'nevado-up', name: 'Paso Nevado Hillclimb', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: [...piece(puenteN, 0, puenteN.length), ...piece(pass, 0, pass.length)], ai: 7, desc: 'Through the northern foothills and up the switchbacks to the snow line.' });
+    races.push({ id: 'nevado-down', name: 'Paso Nevado Descent', type: 'sprint', series: 'Road Racing', laps: 1, closed: false, pts: [...piece(pass, pass.length, 0), ...piece(puenteN, puenteN.length, 0)], ai: 7, desc: 'Brake hard: six hairpins down the mountain and into the lowland valley.' });
   }
-  // Cañón Rojo rally: one lap of the canyon loop, starting beside the causeway
+  // Cañón Rojo rally: one lap of the canyon loop, starting at its eastern approach.
   if (canyon) {
     const s0 = sNear(canyon, -2062, 300);
     races.push({ id: 'canyon', name: 'Cañón Rojo Rally', type: 'dirt', series: 'Dirt Racing', laps: 1, closed: true, pts: [...piece(canyon, s0, canyon.length), ...piece(canyon, 0, s0)], ai: 5, desc: 'Red-rock canyon floor, the west coast flats and a jump over the dunes.' });
   }
-  // Tres Islas Grand Tour: off the canyon island, along the south coast on the ring road and
-  // out over the east causeway to the Autódromo paddock
+  // Keep the original event ID so existing Grand Tour records remain available.
   if (puenteW && puenteE && paddockRoad) {
     const jw = sNear(ring, puenteW.pts[0], puenteW.pts[2]);
     const je = sNear(ring, puenteE.pts[0], puenteE.pts[2]);
@@ -418,7 +417,7 @@ export function buildEvents(world) {
       ...piece(puenteE, 0, puenteE.length),
       ...piece(paddockRoad, 0, paddockRoad.length),
     ];
-    races.push({ id: 'tres-islas', name: 'Tres Islas Grand Tour', type: 'sprint', series: 'Street Scene', laps: 1, closed: false, pts, ai: 7, desc: 'Island to island: off the red-rock canyon, along the south coast and over the east causeway to the Autódromo paddock.' });
+    races.push({ id: 'tres-islas', name: 'Isla Grand Tour', type: 'sprint', series: 'Street Scene', laps: 1, closed: false, pts, ai: 7, desc: 'Cross the island from the red-rock canyon, through the countryside and eastern lowlands to the Autódromo paddock.' });
   }
 
   for (const r of races) {

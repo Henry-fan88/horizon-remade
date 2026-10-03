@@ -123,9 +123,15 @@ function createLayerMasks(world, hf) {
     b[i * 4 + 2] = on(s === SURF.DRY);
     b[i * 4 + 3] = on(s === SURF.GRAVEL || s === SURF.DIRTROAD || s === SURF.VERGE);
     const reg = world.regionMap ? world.regionMap[i] : 0;
-    r[i * 4] = on(reg === 3);
-    r[i * 4 + 1] = on(reg === 1);
-    r[i * 4 + 2] = on(reg === 2);
+    const blend = world.regionBlend ? world.regionBlend[i] : 255;
+    r[i * 4] = reg === 3 ? blend : 0;
+    r[i * 4 + 1] = reg === 1 ? blend : 0;
+    r[i * 4 + 2] = reg === 2 ? blend : 0;
+    // Broad transitional scrub/meadow belts, rather than a one-cell texture seam.
+    if (reg !== 0 && blend < 255) {
+      if (s === SURF.SAND) a[i * 4 + 1] = blend;
+      if (s === SURF.DRY) b[i * 4 + 2] = blend;
+    }
     r[i * 4 + 3] = on(s === SURF.MUD);
   }
   return [maskTexture(a, hf.res, 'terrain-ground'), maskTexture(b, hf.res, 'terrain-cover'), maskTexture(r, hf.res, 'terrain-region')];

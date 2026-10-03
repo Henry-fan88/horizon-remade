@@ -1,6 +1,6 @@
-// The outer islands around the original one, each reached by a causeway from the Costa Ring:
+// Districts of one continuous island, reached by roads from the Costa Ring:
 //   Sierra Nevada  (north)       an alpine massif with snowy peaks and a switchback pass
-//   Autódromo      (south-east)  a motorsport island with a purpose-built circuit
+//   Autódromo      (south-east)  a motorsport peninsula with a purpose-built circuit
 //   Cañón Rojo     (west)        red-rock desert: a mesa cut by a winding canyon
 // DOM-free: used by the worldgen worker and by Node tools.
 import { smoothstep, saturate, clamp, lerp } from '../core/math.js';
@@ -17,12 +17,21 @@ export const ISLANDS = {
   canyon: { x: -2440, z: 0, angle: Math.PI / 2, a: 1270, b: 530, mesa: 118 },
 };
 
-// Causeways: straight embanked roads across the channels (x, z at each end).
-export const CAUSEWAYS = [
+// Keep these road names/anchors stable for saved routes, races and the bridge landmark.
+// They now cross broad lowland valleys rather than isolated strips over open water.
+export const CONNECTOR_ROADS = [
   { name: 'Puente Norte', a: [-262, -1300], b: [-262, -1930] },
   { name: 'Puente Este', a: [1196, 760], b: [1672, 1168] },
   // lands at the canyon mouth, where it meets the rally loop
   { name: 'Puente Oeste', a: [-1350, 262], b: [-2062, 300] },
+];
+
+// Broad overlapping foothills fill the former channels. These are hundreds of metres
+// wide, so the districts connect across open terrain as well as along their roads.
+export const LAND_CONNECTIONS = [
+  { x: -160, z: -1640, angle: 0, a: 1250, b: 720, top: 20 },
+  { x: -1720, z: -60, angle: Math.PI / 2, a: 1400, b: 750, top: 16 },
+  { x: 1550, z: 1290, angle: Math.PI / 4, a: 1060, b: 640, top: 14 },
 ];
 
 // The canyon's centre line, from its mouth on the east shore to the north-west flats.
@@ -32,6 +41,16 @@ export const CANYON_PATH = [
 ];
 
 const gauss = (v, c, w) => Math.exp(-(((v - c) / w) ** 2));
+
+// Round the crease where two landforms meet without lifting the ocean floor.
+// Outside the small height band this is exactly max(a, b).
+export function smoothLandUnion(a, b) {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return Math.max(a, b);
+  const width = 8 * smoothstep(-1, 8, Math.min(a, b));
+  if (width < .001) return Math.max(a, b);
+  const overlap = Math.max(width - Math.abs(a - b), 0) / width;
+  return Math.max(a, b) + overlap * overlap * width * .25;
+}
 
 export function local(I, x, z) {
   const dx = x - I.x,
@@ -166,7 +185,7 @@ function canyonHeight(x, z, n, r) {
 }
 
 // ------------------------------------------------------------------ public
-// Height of the outer islands (or -Infinity away from them) and which region a point is in.
+// Height of each district's authored footprint and which region a point is in.
 export function regionHeight(x, z, n, out) {
   let best = -Infinity,
     region = REGION.MAIN,
@@ -192,14 +211,18 @@ export function regionHeight(x, z, n, out) {
   return best;
 }
 
-// Causeway embankment: a flat deck with rock-armoured sides, rising out of the sea.
-export function causewayHeight(x, z) {
+// Rolling lowlands with the same beach/seabed profile as the rest of the island.
+export function landConnectionHeight(x, z, noise, out) {
   let h = -Infinity;
-  for (const cw of CAUSEWAYS) {
-    const { d } = polyDistance([cw.a, cw.b], x, z);
-    if (d > 40) continue;
-    h = Math.max(h, 2.9 - Math.max(0, d - 10) * 0.62);
+  let edge = 9;
+  for (const connection of LAND_CONNECTIONS) {
+    const r = rho(connection, x, z, noise);
+    if (r > 1.35) continue;
+    const land = connection.top + 4 * noise.fbm(x / 380 + 8, z / 420 - 4, 3);
+    const candidate = coast(r, land);
+    if (candidate > h) { h = candidate; edge = r; }
   }
+  if (out) out.rho = edge;
   return h;
 }
 

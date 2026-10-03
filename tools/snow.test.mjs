@@ -45,7 +45,7 @@ test('packed snow needs substantially longer braking, and ABS improves locked-wh
   t.diagnostic(`80 km/h stopping: asphalt ${dry.distance.toFixed(1)} m, snow with ABS ${snow.distance.toFixed(1)} m, snow locked ${locked.distance.toFixed(1)} m`);
 });
 
-test('snow turns develop more body slip and a wider turn even with full assistance', () => {
+test('snow keeps a wider turning trajectory while assisted steering controls body slip', () => {
   const dry = rolling(car(SURF.ROAD)), snow = rolling(car(SURF.SNOW));
   let drySlip = 0, snowSlip = 0;
   for (let i = 0; i < 240; i++) {
@@ -53,7 +53,7 @@ test('snow turns develop more body slip and a wider turn even with full assistan
     drySlip = Math.max(drySlip, Math.abs(dry.slipAngleBody));
     snowSlip = Math.max(snowSlip, Math.abs(snow.slipAngleBody));
   }
-  assert.ok(snowSlip > drySlip * 1.3);
+  assert.ok(snowSlip < 0.18 && drySlip < 0.15, 'assisted cornering should not force the body into a slide');
   assert.ok(Math.abs(snow.pos.x) < Math.abs(dry.pos.x) * 0.7, 'snow turned as tightly as asphalt');
   assert.ok(snow.pos.z > dry.pos.z);
   assert.ok(snow.snowGrip < 0.4);

@@ -1,5 +1,6 @@
 // Road network: spatial queries (nearest road, progress along a road). No three.js or
 // DOM dependencies, so it also runs inside Node benches and workers.
+import { Junctions } from './junctions.js';
 
 export class Road {
   constructor(d) {
@@ -125,6 +126,10 @@ function kerbFlags(road) {
 }
 
 export class RoadNetwork {
+  get junctions() {
+    return this._junctions ||= new Junctions(this);
+  }
+
   constructor(roadsData) {
     this.roads = roadsData.map((d) => new Road(d));
     this.cellSize = 32;

@@ -142,6 +142,7 @@ export class VehiclePhysics {
     this.bottomOut = 0;
     this.gripMul = 1;
     this.snowGrip = 1;
+    this.lateralAcceleration = G * spec.grip;
     this.powerMul = 1;
     this.frozen = false;
     this.bodyContacts = 0;
@@ -205,6 +206,8 @@ export class VehiclePhysics {
     this.rpm = this.spec.idle || 0;
     this.gear = 1;
     this.snowGrip = 1;
+    this.lateralAcceleration = G * this.spec.grip;
+    this.steerAngle = 0;
     this.upsideTimer = 0;
     this.airTime = 0;
     const wt = this.water;
@@ -367,6 +370,15 @@ export class VehiclePhysics {
     const latV = this.vel.dot(_left);
     const beta = Math.abs(vf) > 2 ? Math.atan2(latV, Math.abs(vf)) : 0; // body slip (+ = sliding left)
     this.slipAngleBody = beta;
+    // Digital full lock must not ask for a radius tighter than the contact patches can
+    // support. Keep a little tyre slip for cornering, but avoid steering far past the
+    // grip peak at speed. Raw steering and deliberate handbrake slides keep full lock.
+    if (steerLevel > 0 && !inp.handbrake && Math.abs(vf) > 3) {
+      const normalAcceleration = G + 0.5 * RHO * s.ClA * vf * vf / this.mass;
+      const surfaceGrip = clamp(this.lateralAcceleration / Math.max(0.001, s.grip * normalAcceleration), 0, 1);
+      const gripLock = Math.atan(s.style.WB * this.lateralAcceleration * 0.95 / (vf * vf)) + 0.045 * surfaceGrip;
+      target = clamp(target, -gripLock, gripLock);
+    }
     if (steerLevel > 0 && vf > 4) {
       // the front wheels follow the direction of travel in a slide; 'normal' lets small
       // slides through and only catches bigger ones
@@ -415,18 +427,21 @@ export class VehiclePhysics {
     // from braking single wheels) and cut the throttle
     this.aid.esc = 0;
     let escYaw = 0;
-    if (A.stability && vf > 5 && this.grounded >= 2) {
-      const vch = 24; // characteristic speed of a mildly understeering car
-      let rDes = (-vf * Math.tan(this.steerAngle)) / s.style.WB / (1 + (vf / vch) * (vf / vch));
+    if (A.stability && !inp.handbrake && vf > 5 && this.grounded >= 2) {
+      let rDes = (-vf * Math.tan(this.steerAngle)) / s.style.WB;
       // the most the tyres can turn the car, including what the wings press down at speed
-      const rMax = ((0.95 * s.grip * (G + (0.5 * RHO * s.ClA * vf * vf) / this.mass)) / vf) * this.snowGrip;
+      const rMax = 0.95 * this.lateralAcceleration / vf;
       rDes = clamp(rDes, -rMax, rMax);
       const yawRate = this.angVel.dot(_up);
-      const err = yawRate - rDes;
-      const over = Math.max(0, Math.abs(err) - 0.14) + 2 * Math.max(0, Math.abs(beta) - 0.09);
+      // Only arrest excess rotation. Adding yaw to an understeering car turns its body
+      // without the matching lateral force, making it skate along its original course.
+      const excessYaw = Math.max(0, Math.abs(yawRate) - Math.abs(rDes) - 0.10);
+      const wrongWay = yawRate * rDes < 0 ? Math.abs(yawRate) : 0;
+      const slideYaw = beta * yawRate < 0 ? 2 * Math.max(0, Math.abs(beta) - 0.055) : 0;
+      const over = Math.max(excessYaw, wrongWay, slideYaw);
       if (over > 0) {
         this.aid.esc = Math.min(1, over * 3);
-        escYaw = -Math.sign(err) * Math.min(1, over / 0.3) * this.mass * 3.2 * this.snowGrip;
+        escYaw = -Math.sign(yawRate) * Math.min(1, over / 0.3) * this.mass * 3.2 * this.snowGrip;
         throttle *= clamp(1 - over * 2.5, 0.15, 1);
       }
     }
@@ -562,7 +577,7 @@ export class VehiclePhysics {
     const handbrake = inp.handbrake;
     let absWork = 0,
       tcWork = 0;
-    let snowLoad = 0, totalLoad = 0;
+    let snowLoad = 0, totalLoad = 0, lateralForce = 0;
     for (let i = 0; i < 4; i++) {
       const w = this.wheels[i];
       if (!w.contact) continue;
@@ -593,6 +608,9 @@ export class VehiclePhysics {
       const wetK = wet > 0 ? 1 - 0.55 * Math.min(1, wet / 0.45) : 1;
       const mu = s.grip * offK * this.gripMul * wetK * clamp(loadK, 0.75, 1.15);
       const maxF = mu * Fz;
+      lateralForce += maxF;
+      // An unloaded contact has no friction budget. Avoid 0/0 in TC and the ellipse.
+      if (maxF < 1e-6) { w.slip = w.spinning = w.locked = 0; continue; }
       const maxFx = maxF * (surf.longitudinal ?? 1.32);
       // lateral force from the slip angle (simplified magic formula)
       const alpha = Math.atan2(vLat, Math.abs(vLong) + 0.6);
@@ -672,6 +690,7 @@ export class VehiclePhysics {
     this.grounded = grounded;
     // ESC has only the grip available at the tyres, including split snow/asphalt.
     this.snowGrip = totalLoad > 0 ? snowLoad / totalLoad : 1;
+    this.lateralAcceleration = lateralForce / this.mass;
     this.aid.abs = absWork;
     this.aid.tcs = tcWork;
     this.offroadFactor = grounded ? offroad / grounded : this.offroadFactor;

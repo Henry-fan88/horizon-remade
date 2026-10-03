@@ -100,6 +100,8 @@ export class World {
 
   // Surface under a point (exact road test, falls back to painted surface map)
   surfaceAt(x, z) {
+    const junction = this.network.junctions.at(x, z);
+    if (junction) return roadSurfaceAt(junction.road, isSnowRoad(junction.road) ? this.height(x, z) : 0);
     const near = this.network.nearest(x, z, 24, null, this._near);
     if (near) {
       const hw = near.road.width / 2;

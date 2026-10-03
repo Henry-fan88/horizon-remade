@@ -15,6 +15,7 @@ export class WorldMap {
     this.el.innerHTML = `<canvas></canvas>
       <div class="wm-title">WORLD MAP</div>
       <div class="wm-legend">
+        <span class="wm-scenic-key"><canvas width="48" height="48" aria-hidden="true"></canvas>Scenic photo spots</span>
         <span><i style="background:${PALETTE.pink}"></i>Races</span>
         <span><i style="background:${PALETTE.cyan}"></i>Speed traps & zones</span>
         <span><i style="background:#b05cff"></i>Drift zones</span>
@@ -22,11 +23,12 @@ export class WorldMap {
         <span><i style="background:#48f0a0"></i>Online players</span>
       </div>
       <div class="wm-help"><kbd>DRAG</kbd> pan · <kbd>WHEEL</kbd> zoom · <kbd>CLICK</kbd> select · <kbd>M</kbd>/<kbd>ESC</kbd> close</div>
-      <div class="wm-destinations"><label for="wm-district">EXPLORE THE ISLAND</label><select id="wm-district"><option value="">Choose an environment</option></select></div>
+      <div class="wm-destinations"><label for="wm-district">EXPLORE THE ISLAND</label><select id="wm-district"><option value="">Choose a destination</option></select></div>
       <div class="wm-panel"></div>`;
     this.canvas = this.el.querySelector('canvas');
     this.panel = this.el.querySelector('.wm-panel');
     this.ctx = this.canvas.getContext('2d');
+    drawIcon(this.el.querySelector('.wm-scenic-key canvas').getContext('2d'), 'camera', 24, 24, 2.2);
     this.zoom = 1;
     this.cx = 0;
     this.cz = 0;
@@ -35,12 +37,16 @@ export class WorldMap {
     this.drag = null;
     const districtSelect = this.el.querySelector('#wm-district');
     this.destinations = [...districtDestinations(game.world.network),...cityDestinations(game.world.network)].map(d => ({ ...d, kind: 'district', type: 'viewpoint' }));
-    for (const d of this.destinations) {
-      const option = document.createElement('option'); option.value = d.id; option.textContent = `${d.label} · ${d.name}`;
-      districtSelect.append(option);
+    for (const [label, destinations] of [['Scenic photo spots', game.scenicSpots], ['Environments & landmarks', this.destinations]]) {
+      const group = document.createElement('optgroup'); group.label = label;
+      for (const d of destinations) {
+        const option = document.createElement('option'); option.value = d.id; option.textContent = d.label ? `${d.label} · ${d.name}` : d.name;
+        group.append(option);
+      }
+      districtSelect.append(group);
     }
     districtSelect.addEventListener('change', () => {
-      const destination = this.destinations.find(d => d.id === districtSelect.value);
+      const destination = [...game.scenicSpots, ...this.destinations].find(d => d.id === districtSelect.value);
       if (!destination) return;
       this.cx = destination.x; this.cz = destination.z; this.zoom = 3.1;
       this.select(destination); this.draw();
@@ -97,13 +103,11 @@ export class WorldMap {
   }
 
   show() {
-    const game = this.game;
     document.getElementById('ui').appendChild(this.el);
     this.open = true;
-    const p = game.player.physics.pos;
-    this.cx = p.x;
-    this.cz = p.z;
-    this.zoom = 1.6;
+    this.cx = 0;
+    this.cz = -150;
+    this.zoom = 1;
     this.selected = null;
     this.panel.classList.remove('on');
     this.el.querySelector('#wm-district').value = '';
@@ -123,7 +127,7 @@ export class WorldMap {
     for (const r of game.events.races) out.push({ kind: 'race', type: r.type === 'dirt' ? 'dirt' : r.type === 'drag' ? 'drag' : 'race', x: r.marker.x, z: r.marker.z, name: r.name, ref: r });
     for (const s of game.events.stunts) out.push({ kind: 'stunt', type: s.type, x: s.x, z: s.z, name: s.name, ref: s });
     out.push({ kind: 'festival', type: 'festival', x: game.festivalPos.x, z: game.festivalPos.z, name: 'Festival Site' });
-    if (game.viewpoint) out.push({ kind: 'poi', type: 'viewpoint', x: game.viewpoint.x, z: game.viewpoint.z, name: 'Volcán Viewpoint' });
+    out.push(...game.scenicSpots);
     return out;
   }
 
@@ -135,7 +139,8 @@ export class WorldMap {
       const [x, y] = this.worldToScreen(it.x, it.z);
       const r = this.canvas.getBoundingClientRect();
       const d = (x + r.left - sx) ** 2 + (y + r.top - sy) ** 2;
-      if (d < bd) {
+      // Photo icons are painted last; their visible circle also wins hit testing.
+      if (d < bd || (it.kind === 'scenic' && d < 14 * 14)) {
         bd = d;
         best = it;
       }
@@ -160,7 +165,8 @@ export class WorldMap {
       const s = it.ref;
       const rec = game.save.data.records[s.id];
       info = `<div class="k">PR STUNT</div><div class="t">${escapeHtml(s.name)}</div><div class="s">${rec ? 'Best: ' + formatValue(s, rec.value, game.settings.units) + ' ' + '★'.repeat(rec.stars) : 'No record yet'}</div>`;
-    } else info = `<div class="k">${it.kind === 'district' ? escapeHtml(it.label.toUpperCase()) : 'LOCATION'}</div><div class="t">${escapeHtml(it.name)}</div>${it.description ? `<div class="s">${escapeHtml(it.description)}</div>` : ''}`;
+    } else info = `<div class="k">${it.kind === 'scenic' ? 'SCENIC PHOTO SPOT' : it.kind === 'district' ? escapeHtml(it.label.toUpperCase()) : 'LOCATION'}</div><div class="t">${escapeHtml(it.name)}</div>${it.description ? `<div class="s">${escapeHtml(it.description)}</div>` : ''}${it.tip ? `<div class="wm-photo-tip">${escapeHtml(it.tip)}</div>` : ''}`;
+    this.panel.classList.toggle('scenic', it.kind === 'scenic');
     this.panel.innerHTML = `${info}<div class="a"></div>`;
     const a = this.panel.querySelector('.a');
     const btn = (label, cls, fn) => {
@@ -269,11 +275,13 @@ export class WorldMap {
     for (const it of this.items()) {
       const [sx, sy] = this.worldToScreen(it.x, it.z);
       if (sx < -20 || sy < -20 || sx > W + 20 || sy > H + 20) continue;
-      drawIcon(g, it.type, sx, sy, this.selected === it ? 1.6 : 1.25);
-      if (it.kind === 'district') {
+      const scenic = it.kind === 'scenic';
+      drawIcon(g, it.type, sx, sy, this.selected === it ? 1.7 : scenic ? 1.45 : 1.25);
+      if (it.kind === 'district' || (scenic && (this.zoom >= 2.2 || this.selected === it))) {
+        const labelY = sy + (scenic ? 29 : -21);
         g.font = '600 13px Barlow, sans-serif'; g.textAlign = 'center';
-        g.lineWidth = 4; g.strokeStyle = '#172321'; g.strokeText(it.name, sx, sy - 21);
-        g.fillStyle = '#f1ead6'; g.fillText(it.name, sx, sy - 21);
+        g.lineWidth = 4; g.strokeStyle = '#172321'; g.strokeText(it.name, sx, labelY);
+        g.fillStyle = scenic ? '#f3dca1' : '#f1ead6'; g.fillText(it.name, sx, labelY);
       }
     }
     if (this.selected && this.selected.kind === 'waypoint') {

@@ -12,6 +12,7 @@ import { VehiclePhysics } from '../src/vehicle/vehiclephysics.js';
 import { CARS } from '../src/vehicle/carspecs.js';
 import { buildEvents } from '../src/game/events.js';
 import { RoadGraph } from '../src/game/gps.js';
+import { CONNECTOR_ROADS, ISLANDS } from '../src/world/regions.js';
 
 const data = generateWorld({}, () => {});
 const world = new World(null);
@@ -21,6 +22,90 @@ world.network = new RoadNetwork(data.roads);
 world._near = {};
 const destinations = districtDestinations(world.network);
 const buildings = cityLayout(world.network, world.hf);
+
+test('generated junctions keep roadside objects clear and provide paved turning corners', () => {
+  const junctions = world.network.junctions;
+  assert.ok(junctions.items.length > 80, 'junctions were only fixed in one area');
+  for (const j of junctions.items) {
+    assert.ok(Number.isFinite(j.radius) && j.radius < 130, 'unbounded junction apron');
+    for (const arm of j.arms) {
+      const k = (arm.index % arm.road.n + arm.road.n) % arm.road.n;
+      const { x, z } = arm.road.pointAt(arm.road.s[k] - arm.direction * 2, {});
+      assert.ok(junctions.at(x, z, .1), `${arm.road.name}: open junction mouth`);
+    }
+  }
+  for (const [name, stride] of [['lamps', 4], ['posts', 4], ['chevrons', 5], ['fences', 4]]) {
+    const values = data.props[name];
+    for (let i = 0; i < values.length; i += stride) assert.ok(!junctions.at(values[i], values[i + 2], 1), `${name}: object obstructs a turn`);
+  }
+  const bridge = junctions.items.find(j => j.links.some(l => l.road.name === 'Puente Este'));
+  assert.equal(world.surfaceAt(bridge.x, bridge.z), SURF.ROAD);
+});
+
+test('regional terrain materials blend gradually across the former island borders', () => {
+  const n = WORLD.res + 1;
+  let transition = 0;
+  for (let z = 1; z < n; z += 3) for (let x = 1; x < n; x += 3) {
+    const i = z * n + x, value = data.regionBlend[i];
+    if (value > 10 && value < 245 && data.heights[i] > 2) transition++;
+    for (const prev of [i - 1, i - n]) if (data.regionMap[prev] === data.regionMap[i]) {
+      assert.ok(Math.abs(value - data.regionBlend[prev]) < 24, 'abrupt biome material boundary');
+    }
+  }
+  assert.ok(transition > 1500, 'transition belts are too narrow');
+});
+
+test('all environments share one broad landmass, even with narrow crossings excluded', () => {
+  const step = 16, n = WORLD.size / step + 1;
+  const dry = new Uint8Array(n * n), visited = new Uint8Array(n * n);
+  // Erode the coast by 128 m. A road-width causeway cannot pass this test.
+  const offsets = [[0, 0], [128, 0], [-128, 0], [0, 128], [0, -128], [90, 90], [-90, 90], [90, -90], [-90, -90]];
+  for (let iz = 0; iz < n; iz++) for (let ix = 0; ix < n; ix++) {
+    const x = ix * step - world.half, z = iz * step - world.half;
+    dry[iz * n + ix] = offsets.every(([dx, dz]) => world.hf.height(x + dx, z + dz) > WORLD.seaLevel + 1);
+  }
+  const index = ({ x, z }) => Math.round((z + world.half) / step) * n + Math.round((x + world.half) / step);
+  const start = index({ x: 250, z: 1110 });
+  const queue = [start]; visited[start] = 1;
+  for (let head = 0; head < queue.length; head++) {
+    const i = queue[head], x = i % n;
+    for (const next of [x > 0 ? i - 1 : -1, x < n - 1 ? i + 1 : -1, i - n, i + n]) {
+      if (next >= 0 && next < dry.length && dry[next] && !visited[next]) {
+        visited[next] = 1; queue.push(next);
+      }
+    }
+  }
+  for (const d of [...destinations, { ...ISLANDS.circuit, id: 'circuit' }]) {
+    assert.ok(visited[index(d)], `${d.id}: separated by water or a narrow crossing`);
+  }
+  assert.ok(world.height(-520, 560) < 0, 'the inland lake was filled');
+  assert.ok(world.height(2900, -1700) < 0, 'the surrounding ocean was filled');
+});
+
+test('former island channels have dry terrain well beyond the road edges and smooth road joins', () => {
+  for (const connector of CONNECTOR_ROADS) {
+    const road = world.network.roads.find(r => r.name === connector.name);
+    for (let s = 20; s < road.length - 20; s += 12) {
+      const p = road.pointAt(s, {});
+      assert.ok(Math.abs(p.y - world.height(p.x, p.z)) < 0.6, `${road.name}: road/terrain step`);
+      for (const offset of [-200, -100, 0, 100, 200]) {
+        assert.ok(world.height(p.x - p.tz * offset, p.z + p.tx * offset) > 2, `${road.name}: water at offset ${offset}`);
+      }
+    }
+  }
+});
+
+test('the circuit has a continuous GPS connection through the paddock entrance', () => {
+  const graph = new RoadGraph(world.network), start = destinations[0];
+  const track = world.network.roads.find(r => r.kind === 'track');
+  const finish = track.pointAt(400, {});
+  const route = graph.route(start.x, start.z, finish.x, finish.z);
+  assert.ok(route.length > 30, 'the circuit is disconnected');
+  for (let i = 1; i < route.length; i++) {
+    assert.ok(Math.hypot(route[i][0] - route[i - 1][0], route[i][1] - route[i - 1][1]) < 50, 'GPS jumps across a gap');
+    assert.ok(world.height(...route[i]) > 2, 'GPS crosses water');
+  }
+});
 
 test('six environment destinations spawn on dry land, inside their connected roads', () => {
   assert.equal(destinations.length, 6);

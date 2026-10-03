@@ -8,8 +8,56 @@ import { snowReliefGLSL, snowDetailTexture } from './snow-material.js';
 // instead of stretching across each road type. An aerial asphalt scan adds patches, repairs
 // and staining at a 30 m scale so long straights are not one uniform grey.
 export function makeRoadMaterial(kind) {
+  return addJunctionSurface(makeBaseRoadMaterial(kind), kind);
+}
+
+let junctionTexture;
+function addJunctionSurface(material, kind) {
+  const previous = material.onBeforeCompile;
+  const previousKey = material.customProgramCacheKey.bind(material);
+  const key = previousKey();
   const assets = getSurfaceAssets();
-  if (kind === 'snow') return addMountainSnow(makeRoadMaterial('road'));
+  junctionTexture ||= makeRoadTexture('junction');
+  material.onBeforeCompile = shader => {
+    previous.call(material, shader);
+    shader.uniforms.junctionAsphalt = { value: junctionTexture };
+    shader.uniforms.junctionGrain = { value: assets?.asphalt?.map || junctionTexture };
+    shader.uniforms.junctionMacro = { value: assets?.asphaltMacro?.map || junctionTexture };
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
+      attribute float junctionBlend;
+      varying float vJunctionBlend;
+      varying vec2 vJunctionUv;
+      varying vec2 vJunctionWorld;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vJunctionBlend = junctionBlend;
+        vJunctionUv = uv;
+        vJunctionWorld = (modelMatrix * vec4(position, 1.0)).xz;`);
+    shader.fragmentShader = `uniform sampler2D junctionAsphalt;
+      uniform sampler2D junctionGrain;
+      uniform sampler2D junctionMacro;
+      varying float vJunctionBlend;
+      varying vec2 vJunctionUv;
+      varying vec2 vJunctionWorld;\n` + shader.fragmentShader;
+    shader.fragmentShader = shader.fragmentShader.replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+      vec3 junctionColor = texture2D(junctionAsphalt, vJunctionWorld / 14.0).rgb;
+      ${assets?.asphalt ? `float jGrain = dot(texture2D(junctionGrain, vJunctionWorld / ${assets.asphalt.tileSize.toFixed(2)}).rgb, vec3(.2126, .7152, .0722));
+        junctionColor *= clamp(jGrain * 5.5 + .55, .65, 1.45);` : ''}
+      ${assets?.asphaltMacro ? `float jMacro = dot(texture2D(junctionMacro, vJunctionWorld / ${assets.asphaltMacro.tileSize.toFixed(2)}).rgb, vec3(.2126, .7152, .0722));
+        junctionColor *= clamp(mix(1.0, jMacro / .16, .5), .72, 1.3);` : ''}
+      float junctionMix = vJunctionBlend;
+      ${['road', 'street', 'highway', 'runway', 'track', 'snow'].includes(kind) ? `float edgeLine = (1.0 - smoothstep(.07, .085, min(vJunctionUv.x, 1.0 - vJunctionUv.x))) * smoothstep(.25, .65, max(diffuseColor.r, max(diffuseColor.g, diffuseColor.b)));
+        junctionMix *= 1.0 - edgeLine;` : ''}
+      diffuseColor.rgb = mix(diffuseColor.rgb, junctionColor, junctionMix);
+      roughnessFactor = mix(roughnessFactor, .96, vJunctionBlend);
+    `);
+  };
+  material.customProgramCacheKey = () => `${key}-junction-v1`;
+  return material;
+}
+
+function makeBaseRoadMaterial(kind) {
+  const assets = getSurfaceAssets();
+  if (kind === 'snow') return addMountainSnow(makeBaseRoadMaterial('road'));
   if (kind === 'mud') return makeMudRoadMaterial(assets?.dirt);
   if (kind === 'desert' && assets?.gravel) return makeGravelRoadMaterial(assets.gravel, true);
   if (kind === 'dirt' && assets?.gravel) return makeGravelRoadMaterial(assets.gravel);

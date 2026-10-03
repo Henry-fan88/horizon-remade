@@ -39,6 +39,7 @@ import { FarShadow, installShadowChunks } from '../render/farshadow.js';
 import { PHYSICS_HZ, DEFAULT_SETTINGS, WORLD } from '../config.js';
 import { clamp, formatNumber } from '../core/math.js';
 import { LOCATIONS } from '../world/worldgen.js';
+import { buildScenicSpots } from '../world/scenic-spots.js';
 
 const STEP = 1 / PHYSICS_HZ;
 
@@ -132,7 +133,7 @@ export class Game {
     this.boards = this.props.boards;
     this.boardsTotal = this.props.boardsTotal;
     this.festivalPos = { x: LOCATIONS.festival.x, z: LOCATIONS.festival.z };
-    this.viewpoint = LOCATIONS.viewpoint;
+    this.scenicSpots = buildScenicSpots(this.world.network);
 
     // UI + systems
     this.mapImages = renderMapImages(this.world, 1536);
@@ -261,6 +262,7 @@ export class Game {
       ...this.events.races.map((r) => ({ x: r.marker.x, z: r.marker.z, type: r.type === 'dirt' ? 'dirt' : r.type === 'drag' ? 'drag' : 'race' })),
       ...this.events.stunts.map((s) => ({ x: s.x, z: s.z, type: s.type })),
       { x: LOCATIONS.festival.x, z: LOCATIONS.festival.z, type: 'festival', pin: true, big: true },
+      ...this.scenicSpots,
     ];
   }
 

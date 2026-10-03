@@ -12,11 +12,11 @@
 import { SimplexNoise, mulberry32, smoothstep, saturate, lerp, clamp, MinHeap, hash2 } from '../core/math.js';
 import { HeightField } from './heightfield.js';
 import { computeBank, crossOffset } from './roadprofile.js';
-import { REGION, ISLANDS, CAUSEWAYS, PASS, CIRCUIT_TRACK, PADDOCK, CANYON_LOOP, regionHeight, causewayHeight, toWorld } from './regions.js';
-import { polyDistance } from './regions.js';
+import { REGION, ISLANDS, CONNECTOR_ROADS, PASS, CIRCUIT_TRACK, PADDOCK, CANYON_LOOP, regionHeight, landConnectionHeight, smoothLandUnion, toWorld } from './regions.js';
 import { WORLD } from '../config.js';
 import { CITY, CITY_STREETS, CITY_PARKS, cityMask, cityTerrainHeight, forestMask, duneMask, mudMask, landmarkPlots } from './districts.js';
 import { RoadNetwork } from './roadnet.js';
+import { junctionDistance } from './junctions.js';
 
 export const SURF = {
   GRASS: 0,
@@ -135,26 +135,29 @@ function baseHeight(x, z, out) {
   if (d > 1.0) beach -= 260 * (d - 1.0) * (d - 1.0);
   h = lerp(h, beach, f);
   if (h < -45) h = -45;
-  // the outer islands and the causeways that reach them
+  // District terrain and broad lowlands form a single continuous coastline.
   let region = REGION.MAIN,
     coastRho = d;
   const rh = regionHeight(x, z, nE, regionTmp);
+  const regionBlend = 1 - smoothstep(.72, 1.14, regionTmp.rho);
+  region = regionBlend > 0 ? regionTmp.region : REGION.MAIN;
   if (rh > h) {
-    h = rh;
-    region = regionTmp.region;
     coastRho = regionTmp.rho;
   }
-  const ch = causewayHeight(x, z);
+  h = smoothLandUnion(h, rh);
+  const ch = landConnectionHeight(x, z, nE, regionTmp);
   if (ch > h) {
-    h = ch;
-    region = REGION.MAIN;
-    coastRho = 1.05;
+    // Retain the local biome when a lowland fills its old shore. Otherwise the
+    // circuit becomes farmland and the canyon gets a sharp green intrusion.
+    coastRho = Math.min(coastRho, regionTmp.rho);
   }
+  h = smoothLandUnion(h, ch);
   if (out) {
     out.d = coastRho;
-    out.volc = region === REGION.MAIN ? volc : 0;
-    out.mMask = region === REGION.MAIN ? mMask : 0;
+    out.volc = volc * (1 - regionBlend);
+    out.mMask = mMask * (1 - regionBlend);
     out.region = region;
+    out.regionBlend = regionBlend;
   }
   return h;
 }
@@ -920,6 +923,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   const volcH = new Float32Array(S * S);
   const mountain = new Float32Array(S * S);
   const regionMap = new Uint8Array(S * S);
+  const regionBlend = new Uint8Array(S * S);
   const tmp = { d: 0, volc: 0, mMask: 0, region: 0 };
   for (let iz = 0; iz < S; iz++) {
     const z = iz * CELL - HALF;
@@ -931,6 +935,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
       volcH[i] = tmp.volc;
       mountain[i] = tmp.mMask;
       regionMap[i] = tmp.region;
+      regionBlend[i] = Math.round(tmp.regionBlend * 255);
     }
     if ((iz & 63) === 0) progress(0.05 + 0.25 * (iz / S), 'Shaping the island');
   }
@@ -1146,14 +1151,14 @@ export function generateWorld(opts = {}, progress = () => {}) {
     const onRing = nearestOn(ringPts, east[0] + 120, east[1] + 60).p;
     routed('Airfield East', 'road', 9, [east, onRing], { maxGrade: 0.1 });
   }
-  // 11. Causeways to the outer islands, starting on the Costa Ring
-  for (const cw of CAUSEWAYS) {
+  // 11. District approach roads through the continuous lowlands.
+  for (const cw of CONNECTOR_ROADS) {
     const a = nearestOn(ringPts, cw.a[0], cw.a[1]).p.slice();
     const p = resample([a, cw.b], 2, false);
     roadDefs.push({ name: cw.name, kind: 'road', width: 11, closed: false, pts2: p, maxGrade: 0.05 });
     markOcc(p);
   }
-  // 12. Outer-island roads from authored layouts
+  // 12. District roads from authored layouts
   const fixedRoad = (name, kind, width, pts, closed, opt = {}) => {
     let p = catmull(pts, closed, 4);
     p = resample(p, 2, closed);
@@ -1168,6 +1173,14 @@ export function generateWorld(opts = {}, progress = () => {}) {
   fixedRoad('Autódromo Horizonte', 'track', 13, CIRCUIT_TRACK.map(([u, v]) => toWorld(CI, u, v)), true, { smooth: 8, maxGrade: 0.06 });
   fixedRoad('Paddock Road', 'road', 10, [toWorld(CI, 0, 560), toWorld(CI, 0, 505), toWorld(CI, -10, 440)], false, { minR: 20 });
   fixedRoad('Cañón Rojo Rally', 'dirt', 8, CANYON_LOOP, true, { smooth: 8, maxGrade: 0.16 });
+  // Reach the circuit through the existing west pit-wall opening. Stay behind the
+  // parked trucks and around the pit building, with both ends snapped to real roads.
+  const circuitPts = roadDefs.find(r => r.kind === 'track').pts2;
+  const pitJoin = toWorld(CI, -365, 300);
+  fixedRoad('Paddock Link', 'road', 8, [
+    ...[[-10, 440], [-230, 440], [-332, 432], [-361, 403], [-365, 354]].map(([u, v]) => toWorld(CI, u, v)),
+    nearestOn(circuitPts, ...pitJoin).p.slice(),
+  ], false, { minR: 18, smooth: 4, maxGrade: 0.08 });
   // San Francisco-inspired streets: diagonal avenues, offset neighborhood blocks,
   // hill switchbacks and a curved waterfront. Grade each junction with its neighbors.
   for (const street of CITY_STREETS) {
@@ -1400,6 +1413,22 @@ export function generateWorld(opts = {}, progress = () => {}) {
   }
   for (const j of fieldJumps) sculptJump(heights, j.x, j.z, j.dx, j.dz, j.H, 8);
   const hf = new HeightField(heights, RES, SIZE);
+  const network = new RoadNetwork(roads);
+  const junctions = network.junctions;
+  // The rounded aprons are paved ground, including their corners outside the
+  // original road strips. Keep grass, vegetation and off-road friction out.
+  for (const j of junctions.items) {
+    const x0 = clamp(Math.floor((j.x - j.radius - 2 + HALF) / CELL), 0, RES);
+    const x1 = clamp(Math.ceil((j.x + j.radius + 2 + HALF) / CELL), 0, RES);
+    const z0 = clamp(Math.floor((j.z - j.radius - 2 + HALF) / CELL), 0, RES);
+    const z1 = clamp(Math.ceil((j.z + j.radius + 2 + HALF) / CELL), 0, RES);
+    for (let iz = z0; iz <= z1; iz++) for (let ix = x0; ix <= x1; ix++) {
+      const distance = junctionDistance(j, ix * CELL - HALF, iz * CELL - HALF);
+      if (distance > 2) continue;
+      const index = iz * S + ix;
+      if (distance < best1[index]) { best1[index] = distance; best1r[index] = j.road.id; }
+    }
+  }
   progress(0.66, 'Painting the land');
 
   // ------------------------------------------------------------ surface + colours
@@ -1424,7 +1453,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
     pave: [150, 146, 140],
     seabed: [196, 178, 140],
   };
-  // outer islands
+  // District palettes
   const A = {
     meadow: [100, 128, 56],
     meadow2: [126, 142, 66],
@@ -1534,42 +1563,6 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const region = regionMap[i];
       let rockCol = null,
         sandCol = P.sand;
-      if (region === REGION.ALPINE) {
-        // meadows, pine forest lower down, granite and snow above ~300 m
-        mix3(A.meadow, A.meadow2, saturate(0.5 + 0.5 * n2));
-        const pineBelt = pineBeltAt(x, z, h);
-        if (pineBelt > 0.45) {
-          blendTo(A.alpForest, smoothstep(0.45, 0.75, pineBelt) * 0.75);
-          if (pineBelt > 0.6) surf = SURF.FOREST;
-        }
-        blendTo(A.scree, smoothstep(200, 320, h + n1 * 30) * 0.45);
-        grassDensity = 1 - smoothstep(220, 330, h);
-        rockCol = h > 200 ? A.graniteDark : A.granite;
-        sandCol = A.pebbles;
-      } else if (region === REGION.CIRCUIT) {
-        mix3(K.dryGrass, K.dryGrass2, saturate(0.5 + 0.5 * n2));
-        surf = SURF.DRY;
-        grassDensity = 0.55;
-        sandCol = K.sand;
-      } else if (region === REGION.CANYON) {
-        // red desert: dunes and washes on the flats, dusty scrub on the mesa
-        mix3(R.sand, R.sand2, saturate(0.5 + 0.5 * n2));
-        blendTo(R.dune, smoothstep(0.2, 0.7, n1) * smoothstep(40, 10, h) * 0.6);
-        if (h > 80) blendTo(R.mesa, 0.7);
-        blendTo(R.scrub, smoothstep(0.3, 0.8, nA.noise2(x / 60, z / 60)) * 0.35);
-        surf = h < 30 ? SURF.SAND : SURF.DRY;
-        const dunes = duneMask(x, z);
-        blendTo([224 + n1 * 9, 187 + n2 * 9, 124 + n1 * 5], dunes);
-        if (dunes > .4) surf = SURF.SAND;
-        grassDensity = .12 * (1 - dunes);
-        // layered rock in the cliffs: bands by height
-        rockCol = R.strata[((Math.floor((h + n1 * 2) / 7) % 5) + 5) % 5];
-        sandCol = R.beach;
-      }
-      if (region !== REGION.MAIN) {
-        // (shared steps below: steep rock, beaches, roads, pads)
-      } else {
-
       // base grass tone
       mix3(P.grass, P.grass2, saturate(0.5 + 0.5 * n2));
       blendTo(P.grassDark, saturate(0.3 + 0.35 * n1) * 0.6);
@@ -1620,9 +1613,48 @@ export function generateWorld(opts = {}, progress = () => {}) {
           grassDensity *= 1 - vt;
         }
       }
+      const mainColor = col.slice(), mainDensity = grassDensity, mainSurface = surf;
+      if (region === REGION.ALPINE) {
+        // meadows, pine forest lower down, granite and snow above ~300 m
+        mix3(A.meadow, A.meadow2, saturate(0.5 + 0.5 * n2));
+        const pineBelt = pineBeltAt(x, z, h);
+        if (pineBelt > 0.45) {
+          blendTo(A.alpForest, smoothstep(0.45, 0.75, pineBelt) * 0.75);
+          if (pineBelt > 0.6) surf = SURF.FOREST;
+        }
+        blendTo(A.scree, smoothstep(200, 320, h + n1 * 30) * 0.45);
+        grassDensity = 1 - smoothstep(220, 330, h);
+        rockCol = h > 200 ? A.graniteDark : A.granite;
+        sandCol = A.pebbles;
+      } else if (region === REGION.CIRCUIT) {
+        mix3(K.dryGrass, K.dryGrass2, saturate(0.5 + 0.5 * n2));
+        surf = SURF.DRY;
+        grassDensity = 0.55;
+        sandCol = K.sand;
+      } else if (region === REGION.CANYON) {
+        // red desert: dunes and washes on the flats, dusty scrub on the mesa
+        mix3(R.sand, R.sand2, saturate(0.5 + 0.5 * n2));
+        blendTo(R.dune, smoothstep(0.2, 0.7, n1) * smoothstep(40, 10, h) * 0.6);
+        if (h > 80) blendTo(R.mesa, 0.7);
+        blendTo(R.scrub, smoothstep(0.3, 0.8, nA.noise2(x / 60, z / 60)) * 0.35);
+        surf = h < 30 ? SURF.SAND : SURF.DRY;
+        const dunes = duneMask(x, z);
+        blendTo([224 + n1 * 9, 187 + n2 * 9, 124 + n1 * 5], dunes);
+        if (dunes > .4) surf = SURF.SAND;
+        grassDensity = .12 * (1 - dunes);
+        // layered rock in the cliffs: bands by height
+        rockCol = R.strata[((Math.floor((h + n1 * 2) / 7) % 5) + 5) % 5];
+        sandCol = R.beach;
       }
-      const mm = mountain[i],
-        vh = volcH[i];
+      if (region !== REGION.MAIN) {
+        const blend = regionBlend[i] / 255;
+        mix3(mainColor, col, blend);
+        grassDensity = lerp(mainDensity, grassDensity, blend);
+        if (blend < .12) surf = mainSurface;
+        if (rockCol) rockCol = rockCol.map((v, c) => lerp(P.rock[c], v, blend));
+        sandCol = sandCol.map((v, c) => lerp(P.sand[c], v, blend));
+      }
+      const mm = mountain[i];
       // steep -> rock
       const rockT = smoothstep((region === REGION.CANYON ? 0.18 : 0.24) + n1 * 0.05, 0.42, slope);
       if (rockT > 0) {
@@ -1639,23 +1671,8 @@ export function generateWorld(opts = {}, progress = () => {}) {
           if (snowT > 0.5) surf = SURF.SNOW;
         }
       }
-      // causeways: rock armour (rip-rap) down to the water on both sides
-      let causeway = false;
-      if (h < 3.2 && region === REGION.MAIN && d > 1) {
-        let cw = 1e9;
-        for (const c of CAUSEWAYS) cw = Math.min(cw, polyDistance([c.a, c.b], x, z).d);
-        if (cw < 42) {
-          causeway = true;
-          const rr = smoothstep(9, 12, cw) * (1 - smoothstep(34, 42, cw));
-          blendTo(n1 > 0 ? P.rock : P.rockDark, rr);
-          if (rr > 0.5) {
-            surf = SURF.ROCK;
-            grassDensity = 0;
-          }
-        }
-      }
       // beaches
-      if (h < 4.2 && d > 0.8 && !causeway) {
+      if (h < 4.2 && d > 0.8) {
         const st = smoothstep(4.2, 2.4, h + n1 * 0.6);
         blendTo(sandCol, st);
         if (h < 0.6) blendTo(P.wetSand, smoothstep(0.6, -0.3, h));
@@ -1765,7 +1782,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   // ------------------------------------------------------------ vegetation
   progress(0.82, 'Planting forests');
   const veg = { broadleaf: [], pine: [], pineSnow: [], palm: [], bush: [], cactus: [], rock: [], birch: [] };
-  const settlements = landmarkPlots(new RoadNetwork(roads), hf);
+  const settlements = landmarkPlots(network, hf);
   const roadDist = (x, z) => {
     const ix = clamp(Math.round((x + HALF) / CELL), 0, RES),
       iz = clamp(Math.round((z + HALF) / CELL), 0, RES);
@@ -1797,6 +1814,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const h = hf.height(x, z);
       if (h < 1.2) continue;
       const rdist = roadDist(x, z);
+      if (junctions.at(x, z, 5)) continue;
       if (inPad(x, z, 4)) continue;
       if (settlements.farms.some(p => Math.abs(x - p.x + 7) < 56 && Math.abs(z - p.z) < 25)) continue;
       if (settlements.chalets.some(p => Math.abs(x - p.x) < 14 && Math.abs(z - p.z) < 13)) continue;
@@ -1811,7 +1829,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
       const surf = surface[i];
       const rot = r3 * Math.PI * 2;
       const reg = regionMap[i];
-      if (reg !== REGION.MAIN) {
+      if (reg !== REGION.MAIN && hash2(ix, iz, 81) < regionBlend[i] / 255) {
         const nearTrack = best1r[i] >= 0 && roads[best1r[i]].kind === 'track';
         if (reg === REGION.ALPINE) {
           if (surf === SURF.SNOW) {
@@ -1925,7 +1943,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
   progress(0.9, 'Placing landmarks');
 
   // ------------------------------------------------------------ props
-  const props = placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD, rand);
+  const props = placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD, rand, junctions);
   progress(0.97, 'Finishing');
 
   return {
@@ -1940,6 +1958,7 @@ export function generateWorld(opts = {}, progress = () => {}) {
     airfield: { ...AF },
     paddock: { ...PD },
     regionMap,
+    regionBlend,
     genTime: performance.now() - t0,
   };
 }
@@ -2003,7 +2022,7 @@ function flattenRect(arr, cx, cz, hl, hw, ang, blend, h) {
 // ----------------------------------------------------------------------------
 // Road-side props: lamps, guard rails, chevrons, fences, wind turbines, boards
 
-function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD, rand) {
+function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD, rand, junctions) {
   const lamps = [];
   const posts = []; // [x,y,z,rotY] roadside delineator posts
   const rails = []; // [x1,y1,z1,x2,y2,z2]
@@ -2053,7 +2072,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD
             nz = tx * sd;
           const x = p[i * 3] + nx * (hw + 1.6),
             z = p[i * 3 + 2] + nz * (hw + 1.6);
-          lamps.push(x, hf.height(x, z), z, Math.atan2(-nx, -nz));
+          if (!junctions.at(x, z, 3)) lamps.push(x, hf.height(x, z), z, Math.atan2(-nx, -nz));
         }
       }
     }
@@ -2072,7 +2091,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD
             oz = p[i * 3 + 2] + nz * (hw + 14);
           const drop = p[i * 3 + 1] - hf.height(ox, oz);
           const tight = Math.abs(curv[i]) > 1 / 70 && Math.sign(curv[i]) === -sd;
-          const want = (drop > 5.5 || (tight && drop > 2)) && rd.kind !== 'dirt';
+          const want = (drop > 5.5 || (tight && drop > 2)) && rd.kind !== 'dirt' && !junctions.at(rx, rz, 5);
           if (want) {
             const y = hf.height(rx, rz);
             if (!run) run = [];
@@ -2097,6 +2116,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD
               const x = p[i * 3] + nx * (hw + 1.5),
                 z = p[i * 3 + 2] + nz * (hw + 1.5);
               const y = hf.height(x, z);
+              if (junctions.at(x, z, 3)) continue;
               if (y < WORLD.seaLevel + 0.4 || Math.abs(y - p[i * 3 + 1]) > 1.1) continue;
               const drop = p[i * 3 + 1] - hf.height(p[i * 3] + nx * (hw + 14), p[i * 3 + 2] + nz * (hw + 14));
               const tight = Math.abs(curv[i]) > 1 / 70 && Math.sign(curv[i]) === -sd;
@@ -2125,7 +2145,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD
         const x = p[i * 3] + nx * (hw + 2.6),
           z = p[i * 3 + 2] + nz * (hw + 2.6);
         // face oncoming traffic: arrow points along bend direction
-        chevrons.push(x, hf.height(x, z), z, Math.atan2(nx, nz), sd);
+        if (!junctions.at(x, z, 3)) chevrons.push(x, hf.height(x, z), z, Math.atan2(nx, nz), sd);
       }
     }
     // wooden fences along farm roads
@@ -2145,6 +2165,7 @@ function placeProps(roads, hf, heights, base, best1, best1r, best2, pads, coastD
           if (inPad) continue;
           const y = hf.height(x, z);
           if (y < 2) continue;
+          if (junctions.at(x, z, 5)) continue;
           fences.push(x, y, z, Math.atan2(tx, tz));
         }
       }
