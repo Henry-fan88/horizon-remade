@@ -512,7 +512,7 @@ export class Menus {
     const net = game.net;
     const st = net.status();
     const chatLog = h('div', { class: 'chat-log' }, net.chatLog.slice(-30).map((m) => h('div', { class: 'chat-line' }, h('b', {}, escapeHtml(m.name) + ': '), escapeHtml(m.m))));
-    const chatInput = h('input', { class: 'chat-input focusable', maxlength: '120', placeholder: 'Say something to your session…' });
+    const chatInput = h('input', { class: 'chat-input focusable', maxlength: '120', placeholder: 'Say something to your world…' });
     chatInput.addEventListener('keydown', (e) => {
       e.stopPropagation();
       if (e.key === 'Enter' && chatInput.value.trim()) {
@@ -534,16 +534,18 @@ export class Menus {
           { class: 'online-left' },
           h('div', { class: 'sec-title' }, 'CONNECTION'),
           h('div', { class: 'online-status ' + st.state }, st.label),
-          st.state !== 'connected'
-            ? h('button', { class: 'btn primary focusable', onclick: () => (net.connect(true), setTimeout(() => this.openPause('online'), 1200)) }, 'CONNECT')
-            : h('button', { class: 'btn focusable', onclick: () => (net.disconnect(), this.openPause('online')) }, 'GO OFFLINE'),
-          h('div', { class: 'sec-title' }, `SESSION PLAYERS (${st.players.length + (st.state === 'connected' ? 1 : 0)})`),
+          st.state === 'outdated'
+            ? h('button', { class: 'btn primary focusable', onclick: () => location.reload() }, 'RELOAD')
+            : st.state !== 'connected'
+              ? h('button', { class: 'btn primary focusable', onclick: () => (net.connect(), setTimeout(() => this.openPause('online'), 1200)) }, 'CONNECT')
+              : h('button', { class: 'btn focusable', onclick: () => (net.disconnect(), this.openPause('online')) }, 'GO OFFLINE'),
+          h('div', { class: 'sec-title' }, `WORLD PLAYERS (${st.players.length + (st.state === 'connected' ? 1 : 0)})`),
           h('div', { class: 'player-list' }, st.state === 'connected' ? h('div', { class: 'me' }, `● ${escapeHtml(game.save.data.name)} (you)`) : null, st.players.map((p) => h('div', {}, h('i', { style: `color:${p.paint}` }, '● '), escapeHtml(p.name), h('span', {}, ` · ${CAR_BY_ID[p.car]?.name || p.car}`)))),
           h('div', { class: 'sec-title' }, 'HORIZON OPEN — ONLINE RACE'),
-          h('p', { class: 'muted' }, 'Start a race lobby. Everyone in your session gets 20 seconds to join, then you all race together.'),
+          h('p', { class: 'muted' }, 'Start a race lobby. Everyone in your world gets 20 seconds to join, then you all race together.'),
           h('div', { class: 'row' }, raceSel, h('button', { class: 'btn primary focusable', ...(st.state === 'connected' ? {} : { disabled: '' }), onclick: () => (net.createRace(raceSel.value), this.close()) }, 'CREATE LOBBY'))
         ),
-        h('div', { class: 'online-right' }, h('div', { class: 'sec-title' }, 'SESSION CHAT'), chatLog, chatInput)
+        h('div', { class: 'online-right' }, h('div', { class: 'sec-title' }, 'WORLD CHAT'), chatLog, chatInput)
       )
     );
     setTimeout(() => (chatLog.scrollTop = chatLog.scrollHeight), 0);

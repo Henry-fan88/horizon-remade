@@ -24,12 +24,31 @@ npm run dev
 ```
 
 Open **http://localhost:5173**. The dev server also runs the multiplayer server, so a second
-browser tab or another device on your network joins the same online session.
+browser tab or another device on your network joins the same online world.
 
 ## Play it online (deploy as a website)
 
-The game is a static site plus a small Node WebSocket server for multiplayer. `npm start` serves
-both from one port.
+The game is a static site plus a small WebSocket server for multiplayer. Everyone who opens the
+site joins **one shared world** (world 1). A world holds 80 drivers; when it is full, newcomers
+are sent to world 2, and so on. The server logic lives in `server/hub.js` and runs on Cloudflare
+(recommended) or on any Node host.
+
+### Recommended — Cloudflare (static game + Durable Object worlds)
+
+```bash
+npx wrangler login   # once
+npm run deploy       # builds with a fresh build id and runs `wrangler deploy`
+npm run cf:dev       # the same setup locally on http://localhost:8787
+```
+
+`wrangler.jsonc` serves `dist/` as static assets (free, unlimited bandwidth) and routes `/ws` to
+one Durable Object per world (`worker/index.js`). Each deploy restarts the worlds. Players
+reconnect automatically, and pages from the previous build are asked to reload, because the
+map may have changed.
+
+### Node server
+
+`npm start` serves the game and the multiplayer worlds from one port.
 
 ```bash
 npm run build      # produces dist/
@@ -153,9 +172,12 @@ seconds without drag movement, the camera smoothly returns to its normal driving
   Preview the fleet at `/tools/traffic-preview.html` on the development server.
 - **Progression:** credits, XP, levels, Wheelspins, an Autoshow and a garage, saved in
   localStorage.
-- **Online:** automatic session matchmaking (16 players per session), interpolated remote cars with
-  nametags and engine sounds, chat, and **Horizon Open** online races. The host starts a lobby,
-  others press J to join, and everyone gets a synchronized countdown.
+- **Online:** one shared world for everyone on the site (80 per world; extra worlds open when
+  one is full). Remote cars are interpolated and have nametags and engine sounds. The nearest
+  ten use their real model, farther ones a single instanced stand-in, and beyond 2.5 km they
+  appear only on the map. Time of day follows the server clock, so everyone shares one sky.
+  Also includes chat and **Horizon Open** online races: the host starts a lobby, others press J
+  to join, and everyone gets a synchronized countdown.
 - **Audio:** an AudioWorklet engine synthesizer (`src/core/engine-worklet.js`) that fires each
   cylinder in its real firing order through modelled headers, pipe and muffler resonances:
   flat-plane V8 (458), supercharged cross-plane V8 (GT500), flat-six (GT3), loping 289 V8
@@ -166,7 +188,8 @@ seconds without drag movement, the camera smoothly returns to its normal driving
 ## Project layout
 
 ```
-server/            Node server: static hosting + WebSocket multiplayer (multiplayer.js)
+server/            Multiplayer worlds (hub.js) + Node server: static hosting, WebSocket transport
+worker/            Cloudflare Worker + Durable Object that run the same worlds (wrangler.jsonc)
 src/config.js      Game title, world constants, default settings (rename the game here)
 src/world/         World generation (worker), terrain, roads, sky/atmosphere, water, vegetation, props
 src/vehicle/       Car specs, real-car model adapters, cockpit, physics, effects

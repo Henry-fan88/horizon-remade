@@ -8,7 +8,10 @@
     "dev": "vite",
     "build": "vite build",
     "start": "node server/index.js",
-    "preview": "npm run build && npm start"
+    "preview": "npm run build && npm start",
+    "test": "node --test tools/*.test.mjs tools/car-assets/*.test.mjs",
+    "cf:dev": "vite build && wrangler dev",
+    "deploy": "node tools/deploy.mjs"
   },
   "engines": {
     "node": "^20.19.0 || >=22.12.0"
@@ -21,6 +24,7 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
-    "vite": "^8.3.1"
+    "vite": "^8.3.1",
+    "wrangler": "^4.148.0"
   }
 }

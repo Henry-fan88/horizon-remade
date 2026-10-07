@@ -1,0 +1,24 @@
+// Cloudflare deployment: static game (dist/) + multiplayer worlds (Durable Objects).
+//   npm run deploy     build with a fresh build id and deploy (tools/deploy.mjs)
+//   npm run cf:dev     build and run the same setup locally on http://localhost:8787
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "horizon-remade",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // everything else is a static file served without running the Worker (free, unlimited)
+    "run_worker_first": ["/ws", "/health"]
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "WORLD", "class_name": "World" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["World"] }],
+  "vars": {
+    // replaced per deploy by tools/deploy.mjs; "dev" turns the version check off
+    "BUILD_ID": "dev"
+  },
+  "observability": { "enabled": true }
+}

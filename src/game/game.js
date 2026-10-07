@@ -177,6 +177,8 @@ export class Game {
     this.menus = new Menus(this);
     this.worldMap = new WorldMap(this, this.mapImages);
     this.net = new NetClient(this);
+    // dynamic time of day follows the server clock, so the whole world shares one sky
+    this.env.clock = () => this.net.serverNow();
     this.probe = new ReflectionProbe(128);
     this.onStuntFinished = (st, value, stars) => {
       this.progression.addXP(250 + stars * 900);
@@ -346,7 +348,8 @@ export class Game {
 
   updateTitleStatus() {
     const el = this.menus.titleEl?.querySelector('.net-status');
-    if (el) el.textContent = this.net.state === 'connected' ? `● ONLINE · ${this.net.players.size + 1} in session` : this.net.state === 'connecting' ? 'Connecting…' : '● OFFLINE · solo';
+    const n = this.net;
+    if (el) el.textContent = n.state === 'connected' ? `● ONLINE · World ${n.world} · ${n.players.size + 1} driving` : n.state === 'connecting' || n.state === 'reconnecting' ? 'Connecting…' : n.state === 'outdated' ? 'New version — reload to go online' : '● OFFLINE · solo';
   }
 
   startFromTitle() {
@@ -1066,7 +1069,7 @@ export class Game {
       const lp = this.progression.levelProgress();
       this.hud.setTopRight(
         `<div class="cr">${formatNumber(d.credits)} CR</div><div class="lvl">LEVEL ${lp.level} · ${Math.round(lp.frac * 100)}%</div>${
-          this.net.state === 'connected' ? `<div class="online">● ONLINE · ${this.net.players.size + 1} DRIVERS</div>` : ''
+          this.net.state === 'connected' ? `<div class="online">● ONLINE · WORLD ${this.net.world} · ${this.net.players.size + 1} DRIVERS</div>` : ''
         }`
       );
     }
@@ -1083,7 +1086,7 @@ export class Game {
       o.ai = ai;
       others.push(o);
     };
-    for (const o of this.net.players.values()) if (o.visible) dot(o.group.position.x, o.group.position.z, o.paint, false);
+    for (const o of this.net.players.values()) if (o.visible) dot(o.pos.x, o.pos.z, o.paint, false);
     if (this.race.active) for (const r of this.race.active.racers) if (!r.isPlayer) dot(r.v.physics.pos.x, r.v.physics.pos.z, '#ffd21f', true);
     const A = this.race.active;
     const h = this._hudState || (this._hudState = {});

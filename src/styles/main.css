@@ -1435,12 +1435,19 @@ kbd {
 .online-status.connected {
   color: #48f0a0;
 }
-.online-status.connecting {
+.online-status.connecting,
+.online-status.reconnecting {
   color: var(--yellow);
 }
 .online-status.offline,
-.online-status.error {
+.online-status.error,
+.online-status.full,
+.online-status.outdated {
   color: #ff6b81;
+}
+.player-list {
+  max-height: 260px;
+  overflow-y: auto;
 }
 .player-list div {
   padding: 6px 0;

@@ -454,6 +454,48 @@ export class SkyView {
 
 const PRESETS = { morning: 8.2, noon: 12.5, golden: 17.35, sunset: 18.05, night: 23.0 };
 
+// Sunrise ~6:00, sunset ~18:30, sun arcs through the southern sky
+export function sunDirection(hour, out) {
+  const a = ((hour - 6.25) / 12.5) * Math.PI;
+  const elevMax = 1.1;
+  const x = Math.cos(a);
+  const up = Math.sin(a);
+  out.set(x * 0.95, up * Math.sin(elevMax), up * Math.cos(elevMax) + 0.25).normalize();
+  return out;
+}
+
+// The shared world clock. In dynamic time of day the hour is a pure function of (server)
+// time, so every player in the world sees the same sky. One day lasts dayMinutes, and the
+// night (sun well below the horizon) passes 3x faster.
+const clockTables = new Map();
+function clockTable(dayMinutes) {
+  const steps = 24 * 60;
+  const secsPerHour = (dayMinutes * 60) / 24;
+  const v = new THREE.Vector3();
+  const cum = new Float64Array(steps + 1); // real seconds elapsed at the start of each game minute
+  for (let i = 0; i < steps; i++) {
+    const night = smoothstep(0.02, -0.16, sunDirection(((i + 0.5) * 24) / steps, v).y) > 0.5;
+    cum[i + 1] = cum[i] + ((24 / steps) * secsPerHour) / (night ? 3 : 1);
+  }
+  return cum;
+}
+
+export function worldHour(ms, dayMinutes = 24) {
+  let cum = clockTables.get(dayMinutes);
+  if (!cum) clockTables.set(dayMinutes, (cum = clockTable(dayMinutes)));
+  const steps = cum.length - 1;
+  const cycle = cum[steps];
+  const s = (((ms / 1000) % cycle) + cycle) % cycle;
+  let lo = 0,
+    hi = steps - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (cum[mid] <= s) lo = mid;
+    else hi = mid - 1;
+  }
+  return ((lo + (s - cum[lo]) / (cum[lo + 1] - cum[lo])) * 24) / steps;
+}
+
 export class Environment {
   constructor(renderer, scene) {
     this.renderer = renderer;
@@ -461,6 +503,7 @@ export class Environment {
     this.hour = 15.2;
     this.mode = 'dynamic';
     this.dayMinutes = 24;
+    this.clock = () => Date.now(); // the game points this at the server clock when online
     this.skyView = new SkyView();
     this.sky = this.skyView.source; // the full sky model (drawn into the cube)
     scene.add(this.skyView.mesh);
@@ -520,21 +563,11 @@ export class Environment {
   }
 
   computeSun(hour, out) {
-    // Sunrise ~6:00, sunset ~18:30, sun arcs through the southern sky
-    const a = ((hour - 6.25) / 12.5) * Math.PI;
-    const elevMax = 1.1;
-    const x = Math.cos(a);
-    const up = Math.sin(a);
-    out.set(x * 0.95, up * Math.sin(elevMax), up * Math.cos(elevMax) + 0.25).normalize();
-    return out;
+    return sunDirection(hour, out);
   }
 
   update(dt, focus) {
-    if (this.mode === 'dynamic') {
-      const nightSpeed = this.nightFactor > 0.5 ? 3 : 1;
-      this.hour += (dt / 60) * (24 / this.dayMinutes) * nightSpeed;
-      if (this.hour >= 24) this.hour -= 24;
-    }
+    if (this.mode === 'dynamic') this.hour = worldHour(this.clock(), this.dayMinutes);
     atmo.time.value += dt;
     const sunDir = this.computeSun(this.hour, this.sunDir);
     const elev = sunDir.y;

@@ -30,7 +30,7 @@ const MIME = {
 };
 const COMPRESSIBLE = new Set(['.html', '.js', '.mjs', '.css', '.json', '.svg', '.txt']);
 
-let hub = null;
+let mp = null;
 
 async function serveFile(req, res, filePath) {
   let st;
@@ -86,7 +86,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname === '/health') {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ ok: true, ...(hub ? hub.stats() : {}) }));
+      res.end(JSON.stringify({ ok: true, build: BUILD, ...(mp ? mp.stats() : {}) }));
       return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -116,7 +116,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-hub = attachMultiplayer(server, { log: true }).hub;
+// The build id ties the page to the server: a client from another build is asked to reload.
+let BUILD = 'dev';
+try {
+  BUILD = JSON.parse(await fsp.readFile(join(ROOT, 'version.json'), 'utf8')).build || 'dev';
+} catch {}
+mp = attachMultiplayer(server, { log: true, build: BUILD });
 
 server.listen(PORT, HOST, async () => {
   try {
