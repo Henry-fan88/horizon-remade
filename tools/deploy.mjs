@@ -17,4 +17,4 @@ const run = (cmd, args, env = {}) => execFileSync(cmd, args, { stdio: 'inherit',
 
 console.log(`\n  Building ${id}\n`);
 run('npx', ['vite', 'build'], { BUILD_ID: id });
-run('npx', ['wrangler', 'deploy', '--var', `BUILD_ID:${id}`, ...process.argv.slice(2)]);
+run('npx', ['--yes', 'wrangler', 'deploy', '--var', `BUILD_ID:${id}`, ...process.argv.slice(2)]);
