@@ -15,7 +15,8 @@
   "durable_objects": {
     "bindings": [{ "name": "WORLD", "class_name": "World" }],
     // A world ticks while anyone is connected, so it never goes idle for a deferred update.
-    // Restart worlds on deploy: players reconnect at once, and older pages are asked to reload.
+    // Ask for immediate restarts on deploy. This was not honoured as of 2026-10 (updates still
+    // waited 5 minutes), so worker/index.js also restarts any world older than the Worker.
     "code_update_strategy": { "mode": "immediate" }
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["World"] }],

@@ -2,7 +2,7 @@
 // joins a multiplayer world. Each world is one Durable Object running server/hub.js, so
 // everyone in "world-1" shares a single in-memory world wherever they connect from.
 import { DurableObject } from 'cloudflare:workers';
-import { World as WorldHub, worldNumber } from '../server/hub.js';
+import { World as WorldHub, worldNumber, buildTime } from '../server/hub.js';
 
 export class World extends DurableObject {
   constructor(ctx, env) {
@@ -18,6 +18,19 @@ export class World extends DurableObject {
   }
 
   async fetch(request) {
+    // After a deploy Cloudflare can keep a busy world on its old code for minutes (code
+    // updates wait for the object to go idle, and a ticking world never does). The Worker
+    // in front is already on the new build: when it is newer, restart this world so every
+    // player reconnects to one running the new code.
+    const front = request.headers.get('X-Build') || 'dev';
+    const own = this.env.BUILD_ID || 'dev';
+    if (front !== 'dev' && own !== 'dev' && buildTime(front) > buildTime(own)) {
+      for (const ws of this.ctx.getWebSockets())
+        try {
+          ws.close(1012, 'restart');
+        } catch {}
+      this.ctx.abort(`world replaced by build ${front}`);
+    }
     if (!this.hub) {
       const id = worldNumber(new URL(request.url).searchParams.get('world'));
       const cap = Number(this.env.WORLD_CAP) || undefined;
@@ -79,7 +92,9 @@ export default {
       if (!allowedOrigin(request.headers.get('Origin'), url)) return new Response('Forbidden', { status: 403 });
       const n = worldNumber(url.searchParams.get('world'));
       url.searchParams.set('world', String(n));
-      return env.WORLD.getByName(`world-${n}`).fetch(new Request(url, request));
+      const forward = new Request(url, request);
+      forward.headers.set('X-Build', env.BUILD_ID || 'dev');
+      return env.WORLD.getByName(`world-${n}`).fetch(forward);
     }
     if (url.pathname === '/health') return Response.json({ ok: true, build: env.BUILD_ID || 'dev' }, { headers: { 'Cache-Control': 'no-store' } });
     return env.ASSETS.fetch(request);
