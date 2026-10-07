@@ -96,15 +96,24 @@ seconds without drag movement, the camera smoothly returns to its normal driving
   Junctions use shared, rounded pavement with continuous outer edge lines and clear approaches;
   road paint, crosswalks, bridge rails and roadside props follow those same junction boundaries.
   Lowland terrain, ground materials and vegetation blend gradually into each district.
-- **Six environments to explore:** the San Francisco-inspired city has 347 rotated building lots,
-  including Victorian hillside houses, Chinatown shops, North Beach storefronts, downtown towers,
-  SoMa mixed-use blocks and an open Embarcadero promenade. Eighteen streets follow different neighborhood
-  alignments, with diagonal Market/Columbus avenues, Lombard bends and real hills. Landmark
-  interpretations include a pyramid tower, rounded downtown tower, Coit-style lookout, Ferry
-  Building and a red suspension bridge on the eastern lowland road. This is a compact playable
-  adaptation, not a surveyed street-for-street reconstruction.
-  The city includes 193 shops, cafe seating, produce displays, lanterns, crossings, benches,
-  parking meters, street trees, hydrants, 168 parked civilian vehicles, 240 animated pedestrians,
+- **Six environments to explore:** the San Francisco-inspired city has about 680 buildings on
+  zero-lot-line street fronts, with commercial block interiors built up and residential blocks
+  keeping planted back yards. Neighbourhoods follow the real city's logic around Market Street:
+  Victorian and Edwardian rows (canted bay windows, bracketed cornices, stoops, garages, Queen Anne
+  gables and corner turrets) in the Western Addition, Haight and Mission; Nob Hill apartment
+  houses with curbside canopies; Chinatown balconies, pagoda eaves, blade signs and lantern-strung
+  Grant Avenue behind the Dragon Gate; North Beach cafes; Financial District stone, Art Deco
+  setbacks and glass towers; SoMa brick lofts with ghost signs; and pier sheds on the Embarcadero.
+  Landmarks include the Transamerica Pyramid, Salesforce Tower, 555 California, Coit Tower, the
+  Ferry Building and Union Square, plus a red suspension bridge on the eastern lowland road.
+  Eighteen streets follow different neighborhood alignments, with diagonal Market/Columbus
+  avenues, Lombard's brick switchbacks and hydrangea beds, and real hills. This is a compact
+  playable adaptation, not a surveyed street-for-street reconstruction.
+  Streets carry Path of Gold lamps and red transit lanes on Market, Muni trolley wires, cable car
+  tracks on Powell and California, palms on the Embarcadero, London planes and ficus downtown,
+  painted curbs, hydrants, all-way stop signs, corner street signs and wooden utility poles in the
+  residential rows. The city includes 422 shopfronts, about 1,000 street and garden trees,
+  crossings, benches, parking meters, 168 parked civilian vehicles, 240 animated pedestrians,
   and a 44-car moving civilian traffic pool. Pedestrians follow sidewalks split at intersections;
   parking and buildings are checked against the driving lanes. The **Traffic & pedestrians**
   setting controls moving traffic and pedestrians; parked vehicles remain part of the scenery. Neighborhoods can be selected directly from the map.
@@ -194,8 +203,11 @@ multiplayer server.
   (`CROP="x0,z0,x1,z1"` renders one area with contour lines).
   The local PBR materials are documented in `public/environment/surfaces/ATTRIBUTION.md`.
   They preload alongside the car and world generation, with procedural fallbacks if unavailable.
-  District definitions and shared building lots live in `src/world/districts.js`; their instanced
-  architecture and landmarks are in `src/world/city-props.js` and `src/world/district-props.js`;
+  District definitions live in `src/world/districts.js`. The city's block layout, neighbourhoods and
+  sidewalk plan are in `src/world/city-layout.js`; `city-props.js` assembles the district from
+  `city-buildings.js` (building types), `city-landmarks.js`, `city-street.js` (streetscape, yards),
+  `city-trees.js` and `city-materials.js` (procedural facade shaders and the sign atlas), all
+  instanced through `city-kit.js`. Other districts' architecture is in `src/world/district-props.js`;
   animated pedestrians and parked cars live in `src/game/citylife.js`. `node --test tools/environment.test.mjs`
   checks broad land connectivity, road and circuit connections, rotated building clearance, sidewalk/parking placement, smooth hillside
   junctions, the rebuilt street race, biome coverage, mud grip and driving from all six environments.

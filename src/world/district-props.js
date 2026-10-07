@@ -36,51 +36,6 @@ export function batches(props) {
   };
 }
 
-// Metre-scaled facade bays: mullions, floor slabs, glass and independently lit offices.
-// This keeps thousands of windows in a handful of draw calls rather than one per pane.
-export function facadeMaterial(color, style, props) {
-  const mat = material(color, { metalness: .25, roughness: .38, emissive: 0xffd29a, emissiveIntensity: 0 });
-  props.nightMats.push({ mat, day: 0, night: .7 });
-  mat.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', `#include <common>
-      varying vec3 vCityWorld; varying vec3 vCityFace; varying vec3 vCityLocal;`)
-      .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vec4 cityP = vec4(position, 1.0);
-        #ifdef USE_INSTANCING
-          cityP = instanceMatrix * cityP;
-        #endif
-        vCityLocal = position;
-        #ifdef USE_INSTANCING
-          vCityLocal *= vec3(length(instanceMatrix[0].xyz),length(instanceMatrix[1].xyz),length(instanceMatrix[2].xyz));
-        #endif
-        vCityWorld = (modelMatrix * cityP).xyz;
-        vCityFace = normal;`);
-    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `#include <common>
-      varying vec3 vCityWorld; varying vec3 vCityFace; varying vec3 vCityLocal;
-      float cityHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`)
-      .replace('vec4 diffuseColor = vec4( diffuse, opacity );', `
-        float cityU = abs(vCityFace.x) > .5 ? vCityLocal.z : vCityLocal.x;
-        vec2 cell = vec2(cityU / ${style === 3 ? '2.5' : '3.2'}, vCityLocal.y / 3.4);
-        vec2 bay = fract(cell);
-        float pane = smoothstep(.07, .1, bay.x) * (1.0 - smoothstep(.9, .93, bay.x));
-        pane *= smoothstep(${style > 2 ? '.22, .26' : '.10, .14'}, bay.y) * (1.0 - smoothstep(.87, .9, bay.y));
-        pane *= 1.0 - step(.5, abs(vCityFace.y));
-        float variation = cityHash(floor(cell) + floor(vCityWorld.xz / 35.0));
-        vec3 glass = diffuse * (.65 + .35 * variation) + vec3(.035, .065, .085);
-        glass *= .82 + .2 * sin(vCityWorld.y * .012);
-        vec3 frame = ${style > 2 ? 'diffuse * 1.65' : 'vec3(.17, .2, .21)'};
-        vec4 diffuseColor = vec4(mix(frame, glass, pane), opacity);`)
-      .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(.79, .2 + variation * .14, pane);`)
-      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
-        metalnessFactor = mix(.08, .48, pane);`)
-      .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        totalEmissiveRadiance *= pane * step(.61, variation) * (.45 + .55 * variation);`);
-  };
-  mat.customProgramCacheKey = () => `city-facade-${style}-v2`;
-  return mat;
-}
-
 export function sign(props, text, x, y, z, width, height, yaw = 0, fg = '#f5ead8', bg = '#284344') {
   const texture = makeTextTexture(text, { w: 512, h: 128, bg, fg, font: 'bold 46px Barlow Condensed' });
   const mat = material(0xffffff, { map: texture, emissive: 0xffffff, emissiveMap: texture, emissiveIntensity: .1 });

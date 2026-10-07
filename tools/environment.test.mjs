@@ -5,7 +5,8 @@ import { WORLD } from '../src/config.js';
 import { HeightField } from '../src/world/heightfield.js';
 import { RoadNetwork } from '../src/world/roadnet.js';
 import { World } from '../src/world/world.js';
-import { CITY, cityLayout, cityStreetLife, footprintsOverlap, footprintDistance, cityDestinations, districtDestinations, forestMask, duneMask, mudMask } from '../src/world/districts.js';
+import { CITY, footprintsOverlap, footprintDistance, cityDestinations, districtDestinations, forestMask, duneMask, mudMask } from '../src/world/districts.js';
+import { cityLayout, cityPlan, cityStreetLife } from '../src/world/city-layout.js';
 import { SURFACE_INFO } from '../src/world/surfaces.js';
 import { roadSnowCoverage } from '../src/world/snow-surface.js';
 import { VehiclePhysics } from '../src/vehicle/vehiclephysics.js';
@@ -148,6 +149,25 @@ test('San Francisco neighborhoods have angled parcels, varied architecture and c
     for(const b of buildings)assert.ok(footprintDistance(b,x,z)>road.width/2+2,`${road.name}: building in lane`);
   }
   for(let i=0;i<buildings.length;i++)for(let j=i+1;j<buildings.length;j++)assert.ok(!footprintsOverlap(buildings[i],buildings[j]),'overlapping buildings');
+});
+
+test('San Francisco blocks have continuous street walls, landmark towers and back yards',()=>{
+  const plan=cityPlan(world.network,world.hf);
+  for(const name of ['transamerica','salesforce','bofa'])assert.ok(plan.buildings.some(b=>b.landmark===name),`${name} missing`);
+  for(const kind of ['victorian','edwardian','apartment','chinatown','commercial','deco','glass','loft','modern'])assert.ok(plan.buildings.some(b=>b.kind===kind),`no ${kind} buildings`);
+  // Rowhouse frontages run wall to wall: most neighbours are within a few centimetres.
+  const rows=new Map();
+  for(const b of plan.buildings.filter(b=>b.road&&['victorian','mission'].includes(b.neighborhood))){const k=`${b.road}:${b.side}`;if(!rows.has(k))rows.set(k,[]);rows.get(k).push(b);}
+  const gaps=[];
+  for(const row of rows.values()){row.sort((a,b)=>a.along-b.along);for(let i=1;i<row.length;i++)gaps.push(row[i].along-(row[i-1].along+row[i-1].w));}
+  gaps.sort((a,b)=>a-b);
+  assert.ok(gaps.length>100&&gaps[Math.floor(gaps.length/2)]<.1,'Victorian rows should be continuous');
+  assert.ok(plan.yards.length>400,'residential blocks need back yards');
+  for(const y of plan.yards){
+    assert.ok(plan.buildings.every(b=>footprintDistance(b,y.x,y.z)>1.5),'yard under a building');
+    const near=world.network.nearest(y.x,y.z,40);
+    assert.ok(!near||near.dist>near.road.width/2+6,'yard on a street');
+  }
 });
 
 test('sidewalk routes and curb parking stay clear of streets and buildings',()=>{

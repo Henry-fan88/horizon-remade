@@ -11,6 +11,7 @@ import { mulberry32 } from '../core/math.js';
 import { buildCircuit } from './circuit-props.js';
 import { buildDistrictLandmarks } from './district-props.js';
 import { buildCity } from './city-props.js';
+import { cityMask } from './districts.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -190,7 +191,7 @@ export class Props {
   }
 
   // Split instances by area cell. Returns, per input matrix, [mesh, index in that mesh].
-  chunked(geo, mat, matrices, { cast = true, receive = true, maxDist = 900, shadowDist = 260, cell = CHUNK } = {}) {
+  chunked(geo, mat, matrices, { cast = true, receive = true, maxDist = 900, shadowDist = 260, cell = CHUNK, colors = null } = {}) {
     const cells = new Map();
     matrices.forEach((m, i) => {
       const k = Math.floor(m.elements[12] / cell) * 4096 + Math.floor(m.elements[14] / cell);
@@ -203,6 +204,7 @@ export class Props {
       const im = new THREE.InstancedMesh(geo, mat, list.length);
       list.forEach((i, k) => {
         im.setMatrixAt(k, matrices[i]);
+        if (colors) im.setColorAt(k, colors[i]);
         lookup[i] = [im, k];
       });
       im.count = list.length;
@@ -844,8 +846,12 @@ export class Props {
   }
 
   // ------------------------------------------------------------------ roadside
-  buildLamps(lamps) {
-    const n = lamps.length / 4;
+  buildLamps(all) {
+    // San Francisco streets carry their own fixtures (city-street.js); only their
+    // night light pools are added here.
+    const net = this.world.network, lamps = [];
+    for (let i = 0; i < all.length; i += 4) if (!net.nearest(all[i], all[i + 2], 12)?.road.city && cityMask(all[i], all[i + 2]) < .55) lamps.push(all[i], all[i + 1], all[i + 2], all[i + 3]);
+    const n = lamps.length / 4, city = this.cityLamps || [];
     if (!n) return;
     const pole = new THREE.CylinderGeometry(0.09, 0.14, 8, 6);
     pole.translate(0, 4, 0);
@@ -868,10 +874,10 @@ export class Props {
     const pg = new THREE.PlaneGeometry(14, 14);
     pg.rotateX(-Math.PI / 2);
     const pools = [];
-    for (let i = 0; i < n; i++) {
-      const r = lamps[i * 4 + 3];
-      const x = lamps[i * 4] + Math.sin(r) * 2.2,
-        z = lamps[i * 4 + 2] + Math.cos(r) * 2.2;
+    for (const list of [lamps, city]) for (let i = 0; i < list.length; i += 4) {
+      const r = list[i + 3];
+      const x = list[i] + Math.sin(r) * 2.2,
+        z = list[i + 2] + Math.cos(r) * 2.2;
       pools.push(mat4(x, this.h(x, z) + 0.12, z));
     }
     this.chunked(pg, poolMat, pools, { cast: false, receive: false, maxDist: 700 });

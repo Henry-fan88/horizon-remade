@@ -1,7 +1,7 @@
 // Renders top-down map images of the island from world data (for minimap + world map).
 import { WORLD } from '../config.js';
 import { SURF } from '../world/worldgen.js';
-import { cityLayout } from '../world/districts.js';
+import { cityLayout } from '../world/city-layout.js';
 
 export function renderMapImages(world, size = 1024) {
   const data = world.data;

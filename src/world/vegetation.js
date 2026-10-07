@@ -43,7 +43,7 @@ function cardCluster(center, size, rnd, crownCenter, count = 3, normalBend = 0.7
   return mergeGeometries(geos);
 }
 
-function trunk(h, r0, r1, sides = 7, bend = 0, segments = 4) {
+export function trunk(h, r0, r1, sides = 7, bend = 0, segments = 4) {
   const g = new THREE.CylinderGeometry(r1, r0, h, sides, segments, true);
   g.translate(0, h / 2, 0);
   if (bend) {
@@ -60,14 +60,14 @@ function trunk(h, r0, r1, sides = 7, bend = 0, segments = 4) {
   return g;
 }
 
-function withGroups(trunkGeo, foliageGeo) {
+export function withGroups(trunkGeo, foliageGeo) {
   const merged = mergeGeometries([trunkGeo, foliageGeo], true);
   trunkGeo.dispose();
   foliageGeo.dispose();
   return merged;
 }
 
-function branchBetween(start, end, base, tip, sides = 5) {
+export function branchBetween(start, end, base, tip, sides = 5) {
   const direction = end.clone().sub(start);
   const geometry = new THREE.CylinderGeometry(tip, base, direction.length(), sides, 2, true);
   const uv = geometry.attributes.uv;
@@ -77,14 +77,14 @@ function branchBetween(start, end, base, tip, sides = 5) {
   return geometry;
 }
 
-function stripAttrs(g) {
+export function stripAttrs(g) {
   // keep only position/normal/uv so merges line up
   for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
   return g.index ? g : g;
 }
 
 // Crown made of many leaf cards spread over the shells of a few overlapping clumps.
-function shellCrown(rnd, clumps, cardsPerClump, cardSize, crownCenter, lod = 0) {
+export function shellCrown(rnd, clumps, cardsPerClump, cardSize, crownCenter, lod = 0) {
   const geos = [];
   for (const cl of clumps) {
     for (let k = 0; k < cardsPerClump; k++) {
@@ -131,7 +131,7 @@ function shellCrown(rnd, clumps, cardsPerClump, cardSize, crownCenter, lod = 0) 
   return mergeGeometries(geos);
 }
 
-function buildBroadleaf(seed, birch = false, lod = 0) {
+export function buildBroadleaf(seed, birch = false, lod = 0) {
   const rnd = mulberry32(seed);
   const H = birch ? 8.6 : 7.2;
   const t = trunk(H, birch ? 0.18 : 0.35, 0.035, lod ? 4 : 8, birch ? 0.3 : 0.18, lod ? 2 : 5);

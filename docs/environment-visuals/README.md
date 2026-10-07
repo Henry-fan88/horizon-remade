@@ -104,3 +104,34 @@ tread segments. Emission counts vary with randomness. The clean final browser
 session had no warnings or errors.
 
 Screenshots: [snow area](snow-area.jpg) and [snow tire reaction](snow-tire-reaction.jpg).
+
+## San Francisco city update — 2026-10-07
+
+The city was rebuilt around the real neighbourhood structure on either side of Market Street:
+
+- **Blocks:** zero-lot-line street walls (median gap between residential neighbours: 4 cm),
+  built-up commercial block interiors, and planted back yards in the residential blocks. Block
+  interiors are found by flood-filling a road raster from the city edge, so nothing is built
+  outside the street grid. Clearance tests use a 1 m road-edge distance field.
+- **Buildings:** twelve building types (Victorian, Edwardian, apartment, mid-century, Chinatown,
+  commercial, Art Deco, glass, slab, loft, modern, waterfront shop). Facades are procedural
+  shaders on instanced boxes: window grids fitted to each wall, recessed reveals, sills, blinds
+  and curtains, gravel/membrane roofs and per-window night lighting. Instance colours give every
+  Painted Lady its own body/trim/accent scheme without extra materials.
+- **Landmarks:** Transamerica Pyramid, Salesforce Tower, 555 California, Coit Tower, the Ferry
+  Building with its clock tower, four Embarcadero piers, Union Square and the Dragon Gate.
+- **Streets:** Path of Gold lamps, red transit lanes and brick sidewalks on Market; Muni trolley
+  wires; cable car tracks on Powell and California; Lombard's brick switchbacks and hydrangeas;
+  palms, London planes, ficus and Monterey cypress; painted curbs, hydrants, all-way stops,
+  street-name signs, bus shelters and utility poles. The island highway is dressed as a
+  boulevard where it crosses the city.
+
+Validation: 63 automated checks passed (including a new test for street walls, landmarks and
+yards) and the production build succeeded. A scripted probe found no building, pole or parked
+car intruding on any carriageway, and the AI drove the City by the Bay Circuit without impacts.
+The city builds in about 0.33 s. In headless Chrome on the M5 Max, city views use 560–1,450
+draw calls per frame (the old city used 710–1,580), 1.4–4.0 M triangles and 2.7–4.2 ms CPU.
+
+Screenshots: [aerial](sf-aerial.jpg), [Victorian row](sf-painted.jpg), [Market Street](sf-market.jpg),
+[Lombard Street](sf-lombard.jpg), [Ferry Building](sf-ferry.jpg), [Transamerica](sf-transamerica.jpg),
+[Chinatown](sf-chinatown.jpg), [back yards from above](sf-yards-top.jpg), [night](sf-night-aerial.jpg).

@@ -1,5 +1,5 @@
 // Shared, DOM-free definitions for scenery, the map and environment inspection.
-import { smoothstep, mulberry32 } from '../core/math.js';
+import { smoothstep } from '../core/math.js';
 
 export const CITY = { x: 1000, z: 170, extent: 560 };
 
@@ -29,6 +29,10 @@ export const CITY_STREETS = [
 export const CITY_PARKS = [
   { name: 'Alamo Square', x: 641, z: 316, r: 31 },
   { name: 'Telegraph Hill', x: 1080, z: -66, r: 24 },
+];
+// Paved civic squares: no buildings, planted with palms instead of lawn.
+export const CITY_PLAZAS = [
+  { name: 'Union Square', x: 809, z: 262, w: 64, d: 62, yaw: .1 },
 ];
 export const cityMask = (x,z) => 1 - smoothstep(.86, 1.08, Math.hypot((x-1030)/580,(z-175)/420));
 export function cityTerrainHeight(x,z) {
@@ -84,40 +88,6 @@ export function clearFootprint(network, x, z, w, d, margin = 4, yaw = 0) {
   return true;
 }
 
-export function cityLayout(network, hf) {
-  const random = mulberry32(77421), buildings = [];
-  for (const road of network.roads.filter(r=>r.city)) for (const side of [-1,1]) {
-    if(road.name==='Embarcadero'&&side===-1)continue;
-    for (let along = 17; along < road.length - 15;) {
-      const p = road.pointAt(along, {});
-      const neighborhood = p.x < 810 ? 'victorian' : p.x < 1060 && p.z < 255 ? 'chinatown' : p.x > 1390 ? 'waterfront' : p.z > 360 ? 'soma' : p.x > 1080 ? 'downtown' : 'northbeach';
-      const house = neighborhood === 'victorian', office = neighborhood === 'downtown';
-      const w = house ? 8.5+random()*4 : office ? 20+random()*15 : 13+random()*10;
-      const d = house ? 14+random()*6 : office ? 23+random()*12 : 16+random()*10;
-      along += w + (house ? 2.3 : 4.5+random()*4);
-      const setback = road.width/2 + 7 + d/2;
-      const x = p.x-p.tz*side*setback, z = p.z+p.tx*side*setback;
-      const yaw = Math.atan2(p.tz*side,-p.tx*side);
-      const waterfront=network.nearest(x,z,85,r=>r.name==='Embarcadero',{});
-      if(waterfront&&waterfront.lateral<0)continue;
-      const b = { x,z,w,d,yaw,road:road.name,along:along-w,side,neighborhood,style:Math.floor(random()*6),block:buildings.length };
-      if (cityMask(x,z)<.3 || CITY_PARKS.some(v=>Math.hypot(x-v.x,z-v.z)<v.r+Math.hypot(w,d)/2)) continue;
-      if (!clearFootprint(network,x,z,w+1,d+1,5,yaw) || buildings.some(a=>footprintsOverlap(a,b,1.5))) continue;
-      const c=Math.cos(yaw), s=Math.sin(yaw);
-      const ys=[-1,1].flatMap(u=>[-1,1].map(v=>hf.height(x+c*u*w/2+s*v*d/2,z-s*u*w/2+c*v*d/2)));
-      if (Math.min(...ys)<2.5 || Math.max(...ys)-Math.min(...ys)>8) continue;
-      b.y = hf.height(x+s*d/2,z+c*d/2); b.base = Math.min(...ys)-.45;
-      const core = Math.max(0,1-Math.hypot((x-1220)/280,(z-180)/280));
-      b.height = house ? 8.2+Math.floor(random()*2)*3.1 : office ? 23+Math.floor(8+core*(20+random()*23))*3.4 : neighborhood==='waterfront' ? 9+random()*8 : 12+Math.floor(random()*5)*3.2;
-      b.core = core; buildings.push(b);
-    }
-  }
-  const towers = buildings.filter(b=>b.neighborhood==='downtown').sort((a,b)=>b.height-a.height);
-  if (towers[0]) { towers[0].landmark='pyramid'; towers[0].height=184; }
-  if (towers[1]) { towers[1].landmark='crown'; towers[1].height=202; }
-  return buildings;
-}
-
 export function footprintDistance(b,x,z) {
   const c=Math.cos(b.yaw||0),s=Math.sin(b.yaw||0),dx=x-b.x,dz=z-b.z;
   return Math.hypot(Math.max(0,Math.abs(c*dx-s*dz)-b.w/2),Math.max(0,Math.abs(s*dx+c*dz)-b.d/2));
@@ -134,38 +104,6 @@ export function footprintsOverlap(a,b,gap=0) {
     if (Math.abs((a.x-b.x)*x+(a.z-b.z)*z)>ra+rb+gap) return false;
   }
   return true;
-}
-
-// Sidewalks are split at every intersection. Walkers reverse at the ends instead
-// of wandering into live traffic. Parking occupies separate curbside pull-outs.
-export function cityStreetLife(network,hf,buildings=cityLayout(network,hf)) {
-  const walks=[],parking=[],random=mulberry32(50012);
-  for (const road of network.roads.filter(r=>r.city)) for (const side of [-1,1]) {
-    let segment=[];
-    const finish=()=>{if(segment.length>=6)walks.push({road:road.name,side,points:segment});segment=[];};
-    for(let s=10;s<road.length-10;s+=3){
-      const p=road.pointAt(s,{}),offset=road.width/2+4.5;
-      const x=p.x-p.tz*side*offset,z=p.z+p.tx*side*offset;
-      const other=network.nearest(x,z,24,r=>r!==road,{});
-      const own=network.nearest(x,z,24,r=>r===road,{});
-      if(hf.height(x,z)<2.5 || (own&&own.dist<road.width/2+3.2) || (other&&other.dist<other.road.width/2+3) || buildings.some(b=>footprintDistance(b,x,z)<1.5)){finish();continue;}
-      segment.push({x,z,y:hf.height(x,z)+.16,s,tx:p.tx,tz:p.tz});
-    }
-    finish();
-    if(road.width<10||road.name==='Embarcadero')continue;
-    for(let s=18+random()*12;s<road.length-18;s+=13+random()*9){
-      if(random()<.28)continue;
-      const p=road.pointAt(s,{}),offset=road.width/2+1.4;
-      const x=p.x-p.tz*side*offset,z=p.z+p.tx*side*offset,yaw=Math.atan2(p.tx*side,p.tz*side);
-      const lot={x,z,y:hf.height(x,z),yaw,w:2.3,d:5.8,road:road.name};
-      const other=network.nearest(x,z,25,r=>r!==road,{});
-      if(lot.y<2.5||!clearFootprint(network,x,z,lot.w,lot.d,.15,yaw)||(other&&other.dist<other.road.width/2+7)||buildings.some(b=>footprintsOverlap(b,lot,1)))continue;
-      const a=hf.height(x+p.tx*2.5,z+p.tz*2.5),b=hf.height(x-p.tx*2.5,z-p.tz*2.5);
-      lot.pitch=-Math.atan2((a-b)*side,5); lot.y=(a+b)/2;
-      parking.push(lot);
-    }
-  }
-  return {walks,parking};
 }
 
 // Use the same lots for geometry and vegetation exclusions, so trees cannot grow
