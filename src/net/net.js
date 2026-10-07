@@ -86,6 +86,7 @@ export class NetClient {
     this.wantOnline = true;
     this.everConnected = false;
     this.hop = false;
+    this.waiting = false;
     this.paused = false;
     this.hiddenSince = 0;
     this.notes = { join: [], leave: [] };
@@ -177,6 +178,13 @@ export class NetClient {
       this.connect();
       return;
     }
+    // this page is newer than the world's code, which a deploy is replacing: try again soon
+    if (this.waiting) {
+      this.waiting = false;
+      this.state = this.everConnected ? 'reconnecting' : 'connecting';
+      this.retryTimer = setTimeout(() => this.wantOnline && this.connect(), 2000);
+      return;
+    }
     // rejoin from world 1, so after a server restart the worlds refill in order
     this.world = 1;
     if (!this.wantOnline) {
@@ -232,7 +240,8 @@ export class NetClient {
     if (this.proxies) this.proxies.count = 0;
     this.notes.join.length = this.notes.leave.length = 0;
     this.lobby = null;
-    this.banner.classList.remove('on');
+    // the reload banner arrives just before the server closes the socket: keep it up
+    if (this.state !== 'outdated') this.banner.classList.remove('on');
   }
 
   onMessage(m) {
@@ -262,6 +271,9 @@ export class NetClient {
           this.state = 'full';
           this.wantOnline = false;
         }
+        break;
+      case 'wait':
+        this.waiting = true;
         break;
       case 'update':
         this.state = 'outdated';

@@ -13,7 +13,10 @@
     "run_worker_first": ["/ws", "/health"]
   },
   "durable_objects": {
-    "bindings": [{ "name": "WORLD", "class_name": "World" }]
+    "bindings": [{ "name": "WORLD", "class_name": "World" }],
+    // A world ticks while anyone is connected, so it never goes idle for a deferred update.
+    // Restart worlds on deploy: players reconnect at once, and older pages are asked to reload.
+    "code_update_strategy": { "mode": "immediate" }
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["World"] }],
   "vars": {

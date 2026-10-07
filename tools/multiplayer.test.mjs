@@ -72,14 +72,21 @@ test('a full world sends newcomers on to the next world', (t) => {
   assert.equal(join(last, 'D').s.last('full').next, null);
 });
 
-test('a page from another build is asked to reload; dev builds always pass', (t) => {
-  const w = new World({ build: 'abc' });
+test('an older page is asked to reload, a newer page waits for the redeployed world', (t) => {
+  const id = (sha, ms) => `${sha}-${ms.toString(36)}`;
+  const build = id('abc1234', 1760000000000);
+  const w = new World({ build });
   t.after(() => w.stop());
-  const old = join(w, 'Old', { b: 'xyz' });
-  assert.equal(old.s.last('update').build, 'abc');
+  const old = join(w, 'Old', { b: id('9f9f9f9', 1759990000000) });
+  assert.equal(old.s.last('update').build, build);
   assert.equal(old.s.closed.code, CLOSE.update);
-  assert.ok(join(w, 'Same', { b: 'abc' }).s.last('welcome'));
+  // after a deploy the page can briefly be newer than the world that is being replaced
+  const newer = join(w, 'Newer', { b: id('def5678-dirty', 1760000500000) });
+  assert.ok(newer.s.last('wait') && !newer.s.last('update'));
+  assert.equal(newer.s.closed.code, CLOSE.wait);
+  assert.ok(join(w, 'Same', { b: build }).s.last('welcome'));
   assert.ok(join(w, 'Dev', { b: 'dev' }).s.last('welcome'));
+  assert.equal(w.size, 2);
 });
 
 test('silent connections are dropped and the world stops ticking when empty', (t) => {

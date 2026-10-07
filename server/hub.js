@@ -18,7 +18,14 @@ const MAX_MESSAGE = 16 * 1024;
 const LOBBY_MS = 20000;
 const RACE_TIMEOUT_MS = 12 * 60 * 1000;
 
-export const CLOSE = { idle: 4000, update: 4001, full: 4002 };
+export const CLOSE = { idle: 4000, update: 4001, full: 4002, wait: 4003 };
+
+// Build ids end in their build time (tools/deploy.mjs: "<sha>-<base36 ms>"), so a world can
+// tell whether a page is older than its own code or newer.
+export function buildTime(build) {
+  const t = parseInt(String(build).split('-').pop(), 36);
+  return Number.isFinite(t) ? t : 0;
+}
 
 const now = () => Date.now();
 const clampNum = (v, lo, hi, def = 0) => (typeof v === 'number' && isFinite(v) ? Math.min(hi, Math.max(lo, v)) : def);
@@ -196,9 +203,15 @@ export class World {
 
   onHello(client, msg) {
     if (client.joined) return;
-    // A page from an older deploy would drive on a different map: ask it to reload.
+    // A page from an older deploy would drive on a different map: ask it to reload. A page
+    // newer than this world means the world itself is about to be replaced by the new
+    // deploy; that page retries shortly instead.
     const build = cleanText(msg.b, 64) || 'dev';
     if (this.build !== 'dev' && build !== 'dev' && build !== this.build) {
+      if (buildTime(build) > buildTime(this.build)) {
+        this.sendTo(client, { t: 'wait' });
+        return this.close(client, CLOSE.wait, 'wait');
+      }
       this.sendTo(client, { t: 'update', build: this.build });
       return this.close(client, CLOSE.update, 'update');
     }
