@@ -20,6 +20,21 @@ const RACE_TIMEOUT_MS = 12 * 60 * 1000;
 
 export const CLOSE = { idle: 4000, update: 4001, full: 4002, wait: 4003 };
 
+// Settings that belong to the world, not to one player: everyone sees the same sky.
+// Any player may change them (the game's settings menu); the world tells everyone.
+export const WORLD_OPTIONS = {
+  timeOfDay: ['dynamic', 'morning', 'noon', 'golden', 'sunset', 'night'],
+  dayLength: [20, 40, 60, 120],
+};
+export const WORLD_DEFAULTS = { timeOfDay: 'dynamic', dayLength: 40 };
+const WORLD_CHANGE_MS = 2000; // per player, so nobody can strobe the sky
+
+export function worldSettings(input) {
+  const out = { ...WORLD_DEFAULTS };
+  for (const [k, options] of Object.entries(WORLD_OPTIONS)) if (input && options.includes(input[k])) out[k] = input[k];
+  return out;
+}
+
 // Build ids end in their build time (tools/deploy.mjs: "<sha>-<base36 ms>"), so a world can
 // tell whether a page is older than its own code or newer.
 export function buildTime(build) {
@@ -41,12 +56,14 @@ export function worldNumber(v) {
 }
 
 export class World {
-  constructor({ id = 1, build = 'dev', cap = WORLD_CAP, log = false, onEmpty = null } = {}) {
+  constructor({ id = 1, build = 'dev', cap = WORLD_CAP, log = false, onEmpty = null, settings = null, onSettings = null } = {}) {
     this.id = id;
     this.build = build;
     this.cap = cap;
     this.log = log;
     this.onEmpty = onEmpty;
+    this.settings = worldSettings(settings);
+    this.onSettings = onSettings; // the host may keep them across restarts
     this.sockets = new Set(); // every open connection
     this.clients = new Set(); // connections that said hello and joined the world
     this.race = null;
@@ -97,6 +114,7 @@ export class World {
       chatBudget: 5,
       lastBudget: t,
       race: null,
+      lastWorldChange: 0,
     };
     this.sockets.add(client);
     this.start();
@@ -185,6 +203,8 @@ export class World {
       case 'emote':
         this.broadcast({ t: 'emote', id: client.id, e: cleanText(msg.e, 16) }, client);
         return;
+      case 'world':
+        return this.onWorld(client, msg, t);
       case 'profile':
         client.car = cleanText(msg.car, 24) || client.car;
         client.paint = /^#[0-9a-fA-F]{6}$/.test(msg.paint) ? msg.paint : client.paint;
@@ -226,9 +246,21 @@ export class World {
     const players = [...this.clients].map((c) => ({ id: c.id, name: c.name, car: c.car, paint: c.paint }));
     client.joined = true;
     this.clients.add(client);
-    this.sendTo(client, { t: 'welcome', id: client.id, world: this.id, cap: this.cap, players, now: now(), protocol: PROTOCOL, race: this.race ? this.raceInfo(this.race) : null });
+    this.sendTo(client, { t: 'welcome', id: client.id, world: this.id, cap: this.cap, players, now: now(), protocol: PROTOCOL, settings: this.settings, race: this.race ? this.raceInfo(this.race) : null });
     this.broadcast({ t: 'join', p: { id: client.id, name: client.name, car: client.car, paint: client.paint } }, client);
     if (this.log) console.log(`[mp] ${client.name} joined world ${this.id} (${this.clients.size} players)`);
+  }
+
+  onWorld(client, msg, t) {
+    if (t - client.lastWorldChange < WORLD_CHANGE_MS) return;
+    const next = { ...this.settings };
+    for (const [k, options] of Object.entries(WORLD_OPTIONS)) if (options.includes(msg[k])) next[k] = msg[k];
+    if (Object.keys(WORLD_OPTIONS).every((k) => next[k] === this.settings[k])) return;
+    client.lastWorldChange = t;
+    this.settings = next;
+    this.broadcast({ t: 'world', settings: next, by: client.name, id: client.id });
+    this.onSettings?.(next);
+    if (this.log) console.log(`[mp] ${client.name} changed world ${this.id}: ${JSON.stringify(next)}`);
   }
 
   onState(client, m) {
@@ -254,6 +286,8 @@ export class World {
       clampNum(m.f, 0, 255) | 0,
       Math.round(clampNum(m.rpm, 0, 12000)),
       clampNum(m.g, -1, 9) | 0,
+      // one code per wheel for tyre smoke and tracks: -1 airborne, else surface*1000 + spin*100 + slip
+      Array.isArray(m.w) && m.w.length === 4 ? m.w.map((x) => clampNum(x, -1, 99999, -1) | 0) : [-1, -1, -1, -1],
     ];
     client.stateT = now();
     client.fresh = true;

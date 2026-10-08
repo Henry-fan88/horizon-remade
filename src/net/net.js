@@ -18,6 +18,16 @@ const TAG_DIST = 450;
 const MAX_PROXIES = 128;
 const KEEPALIVE_MS = 20000; // also runs in hidden tabs, where the frame loop stops
 const HIDDEN_LEAVE_MS = 10 * 60 * 1000; // a tab left in the background gives its slot back
+const FX_DIST = 180; // m: other players' tyre smoke, skid marks and sand/snow tracks
+const AIRBORNE = [-1, -1, -1, -1];
+const WORLD_LABELS = {
+  timeOfDay: { dynamic: 'dynamic day/night', morning: 'morning', noon: 'midday', golden: 'golden hour', sunset: 'sunset', night: 'night' },
+  dayLength: { 20: '20-minute days', 40: '40-minute days', 60: '1-hour days', 120: '2-hour days' },
+};
+
+// One number per wheel for other players' tyre effects: -1 airborne, else
+// surface * 1000 + spin (0-9) * 100 + slip (0-99, slip / 0.02).
+const wheelCode = (w) => (w.contact ? (w.surface | 0) * 1000 + Math.round(Math.min(1, w.spinning || 0) * 9) * 100 + Math.round(Math.min(1.98, w.slip || 0) * 50) : -1);
 
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
@@ -90,6 +100,7 @@ export class NetClient {
     this.paused = false;
     this.hiddenSince = 0;
     this.notes = { join: [], leave: [] };
+    this.worldSettings = null; // the world's shared settings while online (game.worldSetting)
     this.noteTimer = null;
     this.lobby = null;
     this.standings = null;
@@ -189,6 +200,7 @@ export class NetClient {
     this.world = 1;
     if (!this.wantOnline) {
       if (this.state !== 'full' && this.state !== 'outdated') this.state = 'offline';
+      this.leaveWorldSettings();
       return;
     }
     // Keep trying for as long as the page is open. The first retry is quick, so a server
@@ -198,8 +210,11 @@ export class NetClient {
     this.retryTimer = setTimeout(() => this.wantOnline && this.connect(), delay);
     if (was === 'connected') {
       clearTimeout(this.dropTimer);
+      // a short drop (every deploy) keeps the world's sky; a longer one returns to your own
       this.dropTimer = setTimeout(() => {
-        if (this.state === 'reconnecting') this.game.hud.toast('DISCONNECTED', 'Lost connection to the festival server — retrying', 'cyan');
+        if (this.state !== 'reconnecting') return;
+        this.game.hud.toast('DISCONNECTED', 'Lost connection to the festival server — retrying', 'cyan');
+        this.leaveWorldSettings();
       }, 6000);
     }
   }
@@ -212,6 +227,18 @@ export class NetClient {
     if (ws) ws.close();
     this.state = 'offline';
     this.cleanupPlayers();
+    this.leaveWorldSettings();
+  }
+
+  // offline the player's own time of day and day length apply again
+  leaveWorldSettings() {
+    if (!this.worldSettings) return;
+    this.worldSettings = null;
+    this.game.applyWorld();
+  }
+
+  setWorld(change) {
+    this.send({ t: 'world', ...change });
   }
 
   // Runs on a timer rather than per frame, so a hidden tab keeps its place in the world
@@ -254,6 +281,8 @@ export class NetClient {
         this.retry = 0;
         clearTimeout(this.dropTimer);
         this.offset = m.now - Date.now();
+        this.worldSettings = m.settings || null;
+        g.applyWorld();
         for (const p of m.players) this.addPlayer(p);
         // a quiet rejoin after a short drop; announce first joins and world changes
         if (!this.everConnected || m.world !== this.lastWorld)
@@ -275,6 +304,16 @@ export class NetClient {
       case 'wait':
         this.waiting = true;
         break;
+      case 'world': {
+        const before = this.worldSettings || {};
+        this.worldSettings = m.settings;
+        g.applyWorld();
+        const what = Object.keys(WORLD_LABELS)
+          .filter((k) => before[k] !== m.settings[k])
+          .map((k) => WORLD_LABELS[k][m.settings[k]] ?? m.settings[k]);
+        if (what.length) g.hud.toast('WORLD UPDATED', `${m.id === this.id ? 'You' : m.by} set ${what.join(' and ')} for everyone`, 'cyan', 3500);
+        break;
+      }
       case 'update':
         this.state = 'outdated';
         this.wantOnline = false;
@@ -295,11 +334,11 @@ export class NetClient {
           if (s[0] === this.id) continue;
           const p = this.players.get(s[0]);
           if (!p) continue;
-          // s[15] is how long the state waited on the server, so samples keep the sender's spacing
-          const t = m.now - (s[15] || 0);
+          // s[16] is how long the state waited on the server, so samples keep the sender's spacing
+          const t = m.now - (s[16] || 0);
           const b = p.buf;
           if (b.length && t <= b[b.length - 1].t) continue;
-          b.push({ t, p: [s[1], s[2], s[3]], q: [s[4], s[5], s[6], s[7]], v: [s[8], s[9], s[10]], st: s[11], f: s[12], rpm: s[13], g: s[14] });
+          b.push({ t, p: [s[1], s[2], s[3]], q: [s[4], s[5], s[6], s[7]], v: [s[8], s[9], s[10]], st: s[11], f: s[12], rpm: s[13], g: s[14], w: s[15] || AIRBORNE });
           if (b.length > 30) b.shift();
         }
         break;
@@ -384,6 +423,9 @@ export class NetClient {
       st: 0,
       f: 0,
       rpm: 0,
+      w: AIRBORNE,
+      fx: null,
+      fxOn: false,
       dist: Infinity,
       visible: false,
       full: false,
@@ -404,6 +446,22 @@ export class NetClient {
     p.spec = spec;
     p.color.set(p.paint);
     p.body = new RemoteBody(spec);
+    // the shape effects.js expects of a vehicle; the id keys skid marks (id * 4 + wheel)
+    if (p.fxOn) this.liftEffects(p);
+    p.fx = {
+      root: { id: 1e6 + p.id },
+      spec,
+      physics: {
+        speed: 0,
+        forwardSpeed: 0,
+        vel: p.vel,
+        quat: p.quat,
+        wheels: [0, 1, 2, 3].map((i) => {
+          const front = i < 2;
+          return { x: ((i % 2 === 0 ? 1 : -1) * (front ? st.trackF : st.trackR)) / 2, z: ((front ? 1 : -1) * st.WB) / 2, contact: false, surface: 8, slip: 0, spinning: 0, steer: 0, omega: 0, slipAngle: 0, point: new THREE.Vector3() };
+        }),
+      },
+    };
     // stand-in box from the car's centre of mass: ground below it, centred on the body length
     const zc = -(st.WB * spec.wf - st.WB / 2) + ((st.fo ?? 0) - (st.ro ?? 0)) / 2;
     p.proxyLocal.compose(_v.set(0, -spec.cgH, zc), _q.identity(), new THREE.Vector3(st.W, st.H, st.L));
@@ -446,6 +504,7 @@ export class NetClient {
   removePlayer(id) {
     const p = this.players.get(id);
     if (!p) return;
+    if (p.fxOn) this.liftEffects(p);
     this.dropModel(p);
     p.tag?.remove();
     this.game.audio.removeEngine('net' + id);
@@ -475,7 +534,7 @@ export class NetClient {
       this.sendTimer = 0;
       const ph = g.player.physics;
       const f = (ph.input.brake > 0.1 ? 1 : 0) | (g.env.lightsOn ? 2 : 0) | (ph.gear < 0 ? 4 : 0) | (g.race.running ? 8 : 0);
-      this.send({ t: 's', p: [ph.pos.x, ph.pos.y, ph.pos.z], q: [ph.quat.x, ph.quat.y, ph.quat.z, ph.quat.w], v: [ph.vel.x, ph.vel.y, ph.vel.z], st: ph.steerAngle, f, rpm: ph.rpm, g: ph.gear });
+      this.send({ t: 's', p: [ph.pos.x, ph.pos.y, ph.pos.z], q: [ph.quat.x, ph.quat.y, ph.quat.z, ph.quat.w], v: [ph.vel.x, ph.vel.y, ph.vel.z], st: ph.steerAngle, f, rpm: ph.rpm, g: ph.gear, w: ph.wheels.map(wheelCode) });
     }
     this.pingTimer -= dt;
     if (this.pingTimer <= 0) {
@@ -521,6 +580,9 @@ export class NetClient {
         this.proxies.setColorAt(proxies, p.color);
         proxies++;
       }
+      // tyre smoke, skid marks and sand/snow tracks, like the player's own
+      if (p.visible && p.dist < FX_DIST) this.wheelEffects(p, dt);
+      else if (p.fxOn) this.liftEffects(p);
       // kinematic body for collisions
       if (p.visible && !g.race.running && p.pos.distanceToSquared(me) < 900) {
         p.body.pos.copy(p.pos);
@@ -602,11 +664,51 @@ export class NetClient {
         p.quat.set(a.q[0], a.q[1], a.q[2], a.q[3]);
       }
       p.vel.set(a.v[0], a.v[1], a.v[2]);
+      p.w = a.w;
       p.st = a.st || 0;
       p.f = a.f;
       p.rpm = a.rpm;
       p.visible = this.serverNow() - b[b.length - 1].t <= 5000;
     }
+  }
+
+  // Other players' wheels for the shared tyre effects (effects.js, sand/snow): contact and
+  // slip come from the sender, contact points from the car's pose here.
+  wheelEffects(p, dt) {
+    const fx = p.fx;
+    const ph = fx.physics;
+    const st = p.spec.style;
+    const q = p.quat;
+    const fwdX = 2 * (q.x * q.z + q.w * q.y),
+      fwdZ = 1 - 2 * (q.x * q.x + q.y * q.y);
+    ph.speed = Math.hypot(p.vel.x, p.vel.z);
+    ph.forwardSpeed = p.vel.x * fwdX + p.vel.z * fwdZ;
+    const cgZ = st.WB * p.spec.wf - st.WB / 2;
+    for (let i = 0; i < 4; i++) {
+      const w = ph.wheels[i];
+      const code = p.w[i];
+      w.contact = code >= 0;
+      if (!w.contact) continue;
+      w.surface = Math.floor(code / 1000);
+      w.spinning = Math.floor((code % 1000) / 100) / 9;
+      w.slip = (code % 100) / 50;
+      w.steer = i < 2 ? p.st : 0;
+      w.point.set(w.x, -p.spec.cgH, w.z - cgZ).applyQuaternion(q).add(p.pos);
+    }
+    this.game.effects.vehicle(fx, dt, 0.8);
+    p.fxOn = true;
+  }
+
+  // end this player's skid marks and tracks (out of range, gone, or a new car)
+  liftEffects(p) {
+    const e = this.game.effects;
+    for (let i = 0; i < 4; i++) {
+      const key = p.fx.root.id * 4 + i;
+      e.skids.lift(key);
+      e.sand.lift(key);
+      e.snow.lift(key);
+    }
+    p.fxOn = false;
   }
 
   poseModel(p, dt) {

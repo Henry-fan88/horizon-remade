@@ -9,10 +9,19 @@ export { PROTOCOL } from './hub.js';
 export function attachMultiplayer(httpServer, { path = '/ws', log = false, build = 'dev', cap } = {}) {
   const wss = new WebSocketServer({ noServer: true, maxPayload: 16 * 1024, perMessageDeflate: false });
   const worlds = new Map();
+  const saved = new Map(); // world settings outlive an empty world while the server runs
   const worldFor = (n) => {
     let w = worlds.get(n);
     if (!w) {
-      w = new World({ id: n, build, cap, log, onEmpty: (empty) => worlds.get(n) === empty && worlds.delete(n) });
+      w = new World({
+        id: n,
+        build,
+        cap,
+        log,
+        settings: saved.get(n),
+        onSettings: (s) => saved.set(n, s),
+        onEmpty: (empty) => worlds.get(n) === empty && worlds.delete(n),
+      });
       worlds.set(n, w);
     }
     return w;

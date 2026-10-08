@@ -29,7 +29,7 @@ function join(world, name, extra = {}) {
   return { s, c };
 }
 
-const state = (x) => JSON.stringify({ t: 's', p: [x, 2, 3], q: [0, 0, 0, 1], v: [1, 0, 0], st: 0.1, f: 2, rpm: 3000, g: 3 });
+const state = (x, w) => JSON.stringify({ t: 's', p: [x, 2, 3], q: [0, 0, 0, 1], v: [1, 0, 0], st: 0.1, f: 2, rpm: 3000, g: 3, w });
 
 test('players in one world see each other join, move and leave', (t) => {
   const w = new World({ id: 1 });
@@ -42,13 +42,15 @@ test('players in one world see each other join, move and leave', (t) => {
     ['Ann']
   );
   assert.equal(a.s.last('join').p.name, 'Bob');
-  w.message(a.c, state(10));
+  // drifting on asphalt (surface 8): rear wheels spin and slide, a front wheel is airborne
+  w.message(a.c, state(10, [8012, -1, 8960, 8999]));
   w.tick();
   const snap = b.s.last('snap');
   assert.equal(snap.s.length, 1);
   assert.equal(snap.s[0][0], a.c.id);
   assert.equal(snap.s[0][1], 10);
-  assert.ok(snap.s[0][15] >= 0 && snap.s[0][15] < 1000, 'last element is the state age in ms');
+  assert.deepEqual(snap.s[0][15], [8012, -1, 8960, 8999], 'wheel codes for tyre smoke');
+  assert.ok(snap.s[0][16] >= 0 && snap.s[0][16] < 1000, 'last element is the state age in ms');
   // a state is only broadcast once: a silent player is not re-sent with a newer timestamp
   b.s.sent.length = 0;
   w.tick();
@@ -170,6 +172,68 @@ test('the world clock gives every player the same hour at the old pace', () => {
   assert.ok(Math.abs(worldHour(t0 + cycleMs) - worldHour(t0)) < 0.02);
   const h = worldHour(-123456789);
   assert.ok(h >= 0 && h < 24, 'negative times stay in range');
+});
+
+test('wheel codes are sanitised; a state without them reads as airborne', (t) => {
+  const w = new World();
+  t.after(() => w.stop());
+  const a = join(w, 'A');
+  const b = join(w, 'B');
+  w.message(a.c, state(1));
+  w.tick();
+  assert.deepEqual(b.s.last('snap').s[0][15], [-1, -1, -1, -1]);
+  w.message(a.c, state(2, [1e9, 'x', -50, 3.7]));
+  w.tick();
+  assert.deepEqual(b.s.last('snap').s[0][15], [99999, -1, -1, 3]);
+});
+
+test('world settings: anyone can change them, everyone gets them, joiners too', (t) => {
+  const saved = [];
+  const w = new World({ settings: { timeOfDay: 'night', dayLength: 'bogus' }, onSettings: (s) => saved.push(s) });
+  t.after(() => w.stop());
+  const a = join(w, 'Ann');
+  assert.deepEqual(a.s.last('welcome').settings, { timeOfDay: 'night', dayLength: 40 }, 'restored, invalid values fall back');
+  const b = join(w, 'Bob');
+  w.message(b.c, JSON.stringify({ t: 'world', timeOfDay: 'sunset' }));
+  assert.deepEqual(a.s.last('world'), { t: 'world', settings: { timeOfDay: 'sunset', dayLength: 40 }, by: 'Bob', id: b.c.id });
+  assert.equal(b.s.last('world').settings.timeOfDay, 'sunset', 'the changer hears it back');
+  assert.deepEqual(saved.at(-1), { timeOfDay: 'sunset', dayLength: 40 }, 'the host can keep it');
+  // too soon for Bob again, invalid values and no-op changes are ignored
+  w.message(b.c, JSON.stringify({ t: 'world', timeOfDay: 'noon' }));
+  w.message(a.c, JSON.stringify({ t: 'world', timeOfDay: 'midnight', dayLength: 7 }));
+  w.message(a.c, JSON.stringify({ t: 'world', timeOfDay: 'sunset' }));
+  assert.equal(w.settings.timeOfDay, 'sunset');
+  assert.equal(saved.length, 1);
+  w.message(a.c, JSON.stringify({ t: 'world', dayLength: 120 }));
+  assert.deepEqual(w.settings, { timeOfDay: 'sunset', dayLength: 120 });
+  assert.deepEqual(join(w, 'Cat').s.last('welcome').settings, { timeOfDay: 'sunset', dayLength: 120 });
+  const outsider = w.connect(sock());
+  w.message(outsider, JSON.stringify({ t: 'world', timeOfDay: 'noon' }));
+  assert.equal(w.settings.timeOfDay, 'sunset', 'only players in the world');
+});
+
+test('Node server keeps a world\'s settings after it empties', async (t) => {
+  const server = http.createServer();
+  attachMultiplayer(server);
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+  const url = `ws://127.0.0.1:${server.address().port}/ws`;
+  const session = (fn) =>
+    new Promise((resolve) => {
+      const ws = new WebSocket(url);
+      ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', name: 'S', b: 'dev' }));
+      ws.onmessage = (e) => {
+        const m = JSON.parse(e.data);
+        if (m.t === 'welcome') {
+          fn(ws, m);
+          setTimeout(() => (ws.close(), resolve(m)), 100);
+        }
+      };
+    });
+  await session((ws) => ws.send(JSON.stringify({ t: 'world', timeOfDay: 'golden' })));
+  await new Promise((r) => setTimeout(r, 100));
+  const later = await session(() => {});
+  assert.equal(later.settings.timeOfDay, 'golden');
 });
 
 test('world numbers are clamped', () => {

@@ -43,6 +43,10 @@ export function piClass(pi) {
 
 export const PHYSICS_HZ = 120;
 
+// Settings that belong to the online world rather than the player (server/hub.js
+// WORLD_OPTIONS): online everyone shares the world's values.
+export const WORLD_SETTINGS = ['timeOfDay', 'dayLength'];
+
 export const DEFAULT_SETTINGS = {
   quality: 'auto', // auto | low | medium | high | ultra
   dynamicRes: true,

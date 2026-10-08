@@ -36,7 +36,7 @@ import { WorldMap } from '../ui/worldmap.js';
 import { NetClient } from '../net/net.js';
 import { ReflectionProbe } from '../render/probe.js';
 import { FarShadow, installShadowChunks } from '../render/farshadow.js';
-import { PHYSICS_HZ, DEFAULT_SETTINGS, WORLD } from '../config.js';
+import { PHYSICS_HZ, DEFAULT_SETTINGS, WORLD, WORLD_SETTINGS } from '../config.js';
 import { clamp, formatNumber } from '../core/math.js';
 import { LOCATIONS } from '../world/worldgen.js';
 import { buildScenicSpots } from '../world/scenic-spots.js';
@@ -314,12 +314,30 @@ export class Game {
     if (this.world?.grass) this.world.grass.setDensity(Q.grass);
   }
 
+  // Time of day and day length belong to the world: online, the server's values (shared by
+  // everyone in the world, changed through the settings menu); offline, the player's own.
+  worldSetting(key) {
+    const w = this.net?.worldSettings;
+    return w ? w[key] : this.settings[key];
+  }
+
+  applyWorld() {
+    const tod = this.worldSetting('timeOfDay');
+    this.env.setMode(tod === 'dynamic' ? 'dynamic' : tod);
+    this.env.dayMinutes = Math.max(4, Number(this.worldSetting('dayLength')) || 40);
+  }
+
+  changeWorldSetting(key, value) {
+    if (this.net.state === 'connected') return this.net.setWorld({ [key]: value }); // applied when the world confirms
+    this.settings[key] = value;
+    this.applySettings(key);
+  }
+
   applySettings(key = null) {
     const s = this.settings;
     const all = key === null;
     if (all || key === 'quality') this.applyQuality(s.quality, all);
-    if (all || key === 'timeOfDay') this.env.setMode(s.timeOfDay === 'dynamic' ? 'dynamic' : s.timeOfDay);
-    if (all || key === 'dayLength') this.env.dayMinutes = Math.max(4, Number(s.dayLength) || 40);
+    if (all || WORLD_SETTINGS.includes(key)) this.applyWorld();
     if ((all || ['steeringAssist', 'stability', 'abs', 'tractionControl', 'transmission', 'damage'].includes(key)) && this.player) this.configurePlayerPhysics(this.player);
     if (all || key === 'camera') {
       this.gameCam.mode = Number(s.camera) || 0;

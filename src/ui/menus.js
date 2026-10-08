@@ -1,5 +1,5 @@
 // Menus: title, name entry, festival pause menu (tabs), results, wheelspin, dialogs.
-import { GAME_TITLE, GAME_SUBTITLE, GAME_TAGLINE, FESTIVAL_NAME, PALETTE } from '../config.js';
+import { GAME_TITLE, GAME_SUBTITLE, GAME_TAGLINE, FESTIVAL_NAME, PALETTE, WORLD_SETTINGS } from '../config.js';
 import { CARS, CAR_BY_ID, PAINTS, RIM_COLORS } from '../vehicle/carspecs.js';
 import { carThumb } from './thumbs.js';
 import { formatNumber, formatTime, mulberry32 } from '../core/math.js';
@@ -558,23 +558,30 @@ export class Menus {
       s[k] = v;
       game.applySettings(k);
     };
-    const select = (label, key, options) =>
-      h(
+    // world settings (time of day, day length) are shared by everyone when online
+    const shared = game.net.state === 'connected';
+    const select = (label, key, options) => {
+      const world = WORLD_SETTINGS.includes(key);
+      const current = world ? game.worldSetting(key) : s[key];
+      return h(
         'label',
         { class: 'setting' },
-        h('span', {}, label),
+        h('span', {}, world && shared ? `${label} · whole world` : label),
         h(
           'select',
           {
             class: 'focusable',
             onchange: (e) => {
               const v = e.target.value;
-              set(key, v !== '' && !isNaN(Number(v)) ? Number(v) : v);
+              const value = v !== '' && !isNaN(Number(v)) ? Number(v) : v;
+              if (world) game.changeWorldSetting(key, value);
+              else set(key, value);
             },
           },
-          options.map(([v, t]) => h('option', { value: v, ...(String(s[key]) === String(v) ? { selected: '' } : {}) }, t))
+          options.map(([v, t]) => h('option', { value: v, ...(String(current) === String(v) ? { selected: '' } : {}) }, t))
         )
       );
+    };
     const toggle = (label, key) =>
       h(
         'label',

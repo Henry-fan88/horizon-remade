@@ -9,6 +9,11 @@ export class World extends DurableObject {
     super(ctx, env);
     this.hub = null;
     this.clients = new Map(); // WebSocket -> hub client
+    // world settings (time of day...) survive restarts and deploys in the object's storage
+    this.saved = null;
+    ctx.blockConcurrencyWhile(async () => {
+      this.saved = (await ctx.storage.get('settings')) ?? null;
+    });
     // The world lives in memory. If the object restarted while sockets stayed open, those
     // players are unknown to the new world: ask them to reconnect.
     for (const ws of ctx.getWebSockets())
@@ -34,7 +39,14 @@ export class World extends DurableObject {
     if (!this.hub) {
       const id = worldNumber(new URL(request.url).searchParams.get('world'));
       const cap = Number(this.env.WORLD_CAP) || undefined;
-      this.hub = new WorldHub({ id, cap, build: this.env.BUILD_ID || 'dev', log: true });
+      this.hub = new WorldHub({
+        id,
+        cap,
+        build: this.env.BUILD_ID || 'dev',
+        log: true,
+        settings: this.saved,
+        onSettings: (s) => this.ctx.storage.put('settings', s),
+      });
     }
     const [client, server] = Object.values(new WebSocketPair());
     this.ctx.acceptWebSocket(server);
