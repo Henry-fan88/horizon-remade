@@ -40,6 +40,7 @@ import { PHYSICS_HZ, DEFAULT_SETTINGS, WORLD } from '../config.js';
 import { clamp, formatNumber } from '../core/math.js';
 import { LOCATIONS } from '../world/worldgen.js';
 import { buildScenicSpots } from '../world/scenic-spots.js';
+import { EMBED } from '../ui/embed.js';
 
 const STEP = 1 / PHYSICS_HZ;
 
@@ -215,8 +216,13 @@ export class Game {
     addEventListener('pointerdown', unlock);
     addEventListener('keydown', unlock);
 
+    // inside an X post there is no title screen or name prompt: drive straight in as a guest
+    if (EMBED && !this.save.data.name) {
+      this.save.data.name = 'Driver' + Math.floor(1000 + Math.random() * 9000);
+      this.save.write(true);
+    }
     if (this.settings.online) this.net.connect();
-    if (this.params.has('play')) this.enterFreeRoam();
+    if (this.params.has('play') || EMBED) this.enterFreeRoam();
     else this.showTitle();
     this.last = performance.now();
     renderer.setAnimationLoop(() => this.loop());
@@ -1069,7 +1075,7 @@ export class Game {
       const lp = this.progression.levelProgress();
       this.hud.setTopRight(
         `<div class="cr">${formatNumber(d.credits)} CR</div><div class="lvl">LEVEL ${lp.level} · ${Math.round(lp.frac * 100)}%</div>${
-          this.net.state === 'connected' ? `<div class="online">● ONLINE · WORLD ${this.net.world} · ${this.net.players.size + 1} DRIVERS</div>` : ''
+          this.net.state === 'connected' ? `<div class="online">● ONLINE · WORLD ${this.net.world} · ${this.net.players.size + 1} DRIVER${this.net.players.size ? 'S' : ''}</div>` : ''
         }`
       );
     }

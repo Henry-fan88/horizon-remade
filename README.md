@@ -46,6 +46,18 @@ one Durable Object per world (`worker/index.js`). Each deploy restarts the world
 reconnect automatically, and pages from the previous build are asked to reload, because the
 map may have changed.
 
+### Play inside an X post
+
+Post the site's address on X. `index.html` declares a **player card** (`twitter:card` =
+`player`, `twitter:player` = `/?embed=1`, preview image `public/card.jpg`). On desktop x.com
+the post shows the image with a play button, and pressing it loads the game in a ~516 px frame
+inside the post. Everyone who opens it joins the same world. In embed mode (`src/ui/embed.js`)
+the game skips the title screen, joins as a guest, scales the HUD to the frame and asks for one
+click to take the keyboard. Buttons in the corner go fullscreen or open a new tab. The Worker
+makes the card URLs absolute and only lets the page be framed by itself and x.com/twitter.com.
+X caches a card per URL, so add `?v=2` (any new query) to re-crawl after changing it. The X
+mobile apps show the preview and open the site instead of playing inline.
+
 ### Node server
 
 `npm start` serves the game and the multiplayer worlds from one port.

@@ -11,12 +11,16 @@ import { RoadNetwork, buildRoadMeshes } from './roads.js';
 import { makeDetailTexture, makeWaterNormals } from './textures.js';
 import { Vegetation } from './vegetation.js';
 import { Grass } from './grass.js';
+import { openWorker } from '../core/workers.js';
 
 export { SURF };
 
-export function generateInWorker(seed, onProgress) {
+export async function generateInWorker(seed, onProgress) {
+  const w = await openWorker(
+    () => new Worker(new URL('./worldgen.worker.js', import.meta.url), { type: 'module' }),
+    () => import('./worldgen.worker.js?worker&url')
+  );
   return new Promise((resolve, reject) => {
-    const w = new Worker(new URL('./worldgen.worker.js', import.meta.url), { type: 'module' });
     w.onmessage = (e) => {
       const m = e.data;
       if (m.type === 'progress') onProgress?.(m.p, m.msg);

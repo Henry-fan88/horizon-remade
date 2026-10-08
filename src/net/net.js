@@ -500,8 +500,9 @@ export class NetClient {
       if (!p.model && built++ === 0) this.buildModel(p);
       p.full = !!p.model;
     }
-    const W = innerWidth,
-      H = innerHeight;
+    // the tag layer's own size: the HUD is scaled down inside an X post
+    const W = this.tagLayer.clientWidth || innerWidth,
+      H = this.tagLayer.clientHeight || innerHeight;
     const nearEngines = [];
     let proxies = 0;
     const me = g.player.physics.pos;

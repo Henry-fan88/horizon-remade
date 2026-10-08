@@ -9,8 +9,9 @@
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS",
+    // the page itself gets absolute link-preview URLs and X-only framing from the Worker;
     // everything else is a static file served without running the Worker (free, unlimited)
-    "run_worker_first": ["/ws", "/health"]
+    "run_worker_first": ["/", "/index.html", "/ws", "/health"]
   },
   "durable_objects": {
     "bindings": [{ "name": "WORLD", "class_name": "World" }],

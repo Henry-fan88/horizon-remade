@@ -6,6 +6,23 @@
     <meta name="theme-color" content="#0b0b12" />
     <meta name="description" content="Horizon Remade — an open-world festival racing game you can play in the browser, solo or online." />
     <title>HORIZON REMADE — Open World Festival Racing</title>
+    <!-- Link previews. On x.com the player card plays the game inside the post: X frames
+         twitter:player (this page at ?embed=1, see src/ui/embed.js). The Cloudflare Worker
+         makes these paths absolute for the domain serving the page. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Horizon Remade" />
+    <meta property="og:title" content="Horizon Remade — drive together in one open world" />
+    <meta property="og:description" content="An open-world festival racing game in your browser. Everyone who opens the link drives in the same world." />
+    <meta property="og:url" content="/" />
+    <meta property="og:image" content="/card.jpg?v=1" />
+    <meta name="twitter:card" content="player" />
+    <meta name="twitter:title" content="Horizon Remade — drive together in one open world" />
+    <meta name="twitter:description" content="Play right here in the post. Everyone who opens it drives in the same world." />
+    <meta name="twitter:image" content="/card.jpg?v=1" />
+    <meta name="twitter:image:alt" content="A red Ferrari 458 at the festival site, with a Ferris wheel and the city skyline behind it." />
+    <meta name="twitter:player" content="/?embed=1" />
+    <meta name="twitter:player:width" content="480" />
+    <meta name="twitter:player:height" content="480" />
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' x2='1'%3E%3Cstop offset='0' stop-color='%23ff2d87'/%3E%3Cstop offset='1' stop-color='%23ff8a1f'/%3E%3C/linearGradient%3E%3C/defs%3E%3Crect width='64' height='64' rx='14' fill='%230b0b12'/%3E%3Cpath d='M10 42 L54 42 L50 48 L6 48Z' fill='url(%23g)'/%3E%3Cpath d='M18 38 A14 14 0 0 1 46 38Z' fill='url(%23g)'/%3E%3C/svg%3E" />
   </head>
   <body>

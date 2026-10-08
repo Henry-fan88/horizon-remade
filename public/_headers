@@ -6,3 +6,8 @@
 
 /environment/*
   Cache-Control: public, max-age=604800
+
+# The game's files may be loaded from a sandboxed frame without same-origin rights (origin
+# "null"), which fetches scripts, styles and models with CORS.
+/*
+  Access-Control-Allow-Origin: *

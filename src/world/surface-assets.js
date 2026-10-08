@@ -1,6 +1,7 @@
 // Shared local CC0 photo-scanned surface maps. Original sources and checksums:
 // public/environment/surfaces/{ATTRIBUTION.md,manifest.json}.
 import * as THREE from 'three';
+import { openWorker } from '../core/workers.js';
 
 const definitions = {
   grass: { id: 'aerial_grass_rock', tileSize: 15 },
@@ -34,19 +35,23 @@ export const TERRAIN_LAYERS = [
 ];
 let terrainArrays = null;
 
-function packTerrainArrays(maxAnisotropy) {
-  const base = `${import.meta.env.BASE_URL}environment/surfaces/`;
+async function packTerrainArrays(maxAnisotropy) {
+  // absolute: the worker resolves relative URLs against its own file in assets/
+  const base = new URL(`${import.meta.env.BASE_URL}environment/surfaces/`, location.href).href;
   const size = 1024,
     normalSize = 512;
   const layers = TERRAIN_LAYERS.map(({ id }) => ({ diff: `${base}${id}_diff_1k.jpg`, rough: `${base}${id}_rough_1k.jpg`, nor: `${base}${id}_nor_gl_1k.jpg`, disp: `${base}${id}_disp_1k.jpg` }));
+  let worker;
+  try {
+    worker = await openWorker(
+      () => new Worker(new URL('./surface-pack.worker.js', import.meta.url), { type: 'module' }),
+      () => import('./surface-pack.worker.js?worker&url')
+    );
+  } catch (error) {
+    console.warn('[horizon] terrain texture arrays unavailable', error);
+    return null;
+  }
   return new Promise((resolve) => {
-    let worker;
-    try {
-      worker = new Worker(new URL('./surface-pack.worker.js', import.meta.url), { type: 'module' });
-    } catch (error) {
-      console.warn('[horizon] terrain texture arrays unavailable', error);
-      return resolve(null);
-    }
     worker.onmessage = (e) => {
       worker.terminate();
       if (!e.data.ok) {

@@ -89,9 +89,14 @@ export class WorldMap {
     return WORLD.size / (S * this.zoom);
   }
 
+  // on-screen pixels per layout pixel: the HUD layer is scaled down inside an X post
+  screenScale(r) {
+    return r.width / (this.canvas.clientWidth || r.width);
+  }
+
   screenToWorld(sx, sy) {
     const r = this.canvas.getBoundingClientRect();
-    const mpp = this.metresPerPixel();
+    const mpp = this.metresPerPixel() / this.screenScale(r);
     return [this.cx + (sx - r.left - r.width / 2) * mpp, this.cz + (sy - r.top - r.height / 2) * mpp];
   }
 
@@ -135,10 +140,11 @@ export class WorldMap {
     const items = this.items();
     let best = null,
       bd = 22 * 22;
+    const r = this.canvas.getBoundingClientRect();
+    const k = this.screenScale(r);
     for (const it of items) {
       const [x, y] = this.worldToScreen(it.x, it.z);
-      const r = this.canvas.getBoundingClientRect();
-      const d = (x + r.left - sx) ** 2 + (y + r.top - sy) ** 2;
+      const d = (x * k + r.left - sx) ** 2 + (y * k + r.top - sy) ** 2;
       // Photo icons are painted last; their visible circle also wins hit testing.
       if (d < bd || (it.kind === 'scenic' && d < 14 * 14)) {
         bd = d;

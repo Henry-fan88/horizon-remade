@@ -11,6 +11,7 @@ import '@fontsource/barlow-condensed/latin-700-italic.css';
 import '@fontsource/barlow-condensed/latin-800-italic.css';
 
 import { Game } from './game/game.js';
+import { EMBED, installEmbed } from './ui/embed.js';
 
 const TIPS = [
   'Chain skills together — drifts, near misses, air and speed — to build a multiplier.',
@@ -50,6 +51,7 @@ async function boot() {
       if (m) msg.textContent = m;
     });
     fill.style.width = '100%';
+    if (EMBED) installEmbed(game);
     if (import.meta.env.DEV && new URLSearchParams(location.search).has('capture')) {
       const { installCapture } = await import('./dev/capture.js');
       installCapture(game);

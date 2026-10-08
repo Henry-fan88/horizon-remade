@@ -74,8 +74,10 @@ export class World extends DurableObject {
 }
 
 // Pages from this site only (plus local development), so other sites can't run up the bill.
+// "null" is this page inside a sandboxed frame without same-origin rights (a possible
+// X post frame); only X may frame the page (FRAME_ANCESTORS).
 function allowedOrigin(origin, url) {
-  if (!origin) return true;
+  if (!origin || origin === 'null') return true;
   try {
     const o = new URL(origin);
     return o.host === url.host || o.hostname === 'localhost' || o.hostname === '127.0.0.1';
@@ -84,9 +86,32 @@ function allowedOrigin(origin, url) {
   }
 }
 
+// The page may be framed by itself and by X (the player card inside a post), nobody else.
+const FRAME_ANCESTORS = "frame-ancestors 'self' https://x.com https://*.x.com https://twitter.com https://*.twitter.com";
+const LINK_META = new Set(['og:url', 'og:image', 'twitter:image', 'twitter:player']);
+
+// index.html keeps its link-preview URLs relative; X and others need them absolute.
+async function page(request, env, url) {
+  const res = await env.ASSETS.fetch(request);
+  if (!res.headers.get('Content-Type')?.includes('text/html')) return res;
+  const out = new HTMLRewriter()
+    .on('meta', {
+      element(el) {
+        const key = el.getAttribute('property') || el.getAttribute('name');
+        const content = el.getAttribute('content');
+        if (LINK_META.has(key) && content?.startsWith('/')) el.setAttribute('content', url.origin + content);
+      },
+    })
+    .transform(res);
+  const headers = new Headers(out.headers);
+  headers.set('Content-Security-Policy', FRAME_ANCESTORS);
+  return new Response(out.body, { status: out.status, statusText: out.statusText, headers });
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
+    if (url.pathname === '/' || url.pathname === '/index.html') return page(request, env, url);
     if (url.pathname === '/ws') {
       if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('Expected a WebSocket upgrade', { status: 426 });
       if (!allowedOrigin(request.headers.get('Origin'), url)) return new Response('Forbidden', { status: 403 });
