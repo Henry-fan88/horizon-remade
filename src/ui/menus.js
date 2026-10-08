@@ -542,8 +542,24 @@ export class Menus {
           h('div', { class: 'sec-title' }, `WORLD PLAYERS (${st.players.length + (st.state === 'connected' ? 1 : 0)})`),
           h('div', { class: 'player-list' }, st.state === 'connected' ? h('div', { class: 'me' }, `● ${escapeHtml(game.save.data.name)} (you)`) : null, st.players.map((p) => h('div', {}, h('i', { style: `color:${p.paint}` }, '● '), escapeHtml(p.name), h('span', {}, ` · ${CAR_BY_ID[p.car]?.name || p.car}`)))),
           h('div', { class: 'sec-title' }, 'HORIZON OPEN — ONLINE RACE'),
-          h('p', { class: 'muted' }, 'Start a race lobby. Everyone in your world gets 20 seconds to join, then you all race together.'),
-          h('div', { class: 'row' }, raceSel, h('button', { class: 'btn primary focusable', ...(st.state === 'connected' ? {} : { disabled: '' }), onclick: () => (net.createRace(raceSel.value), this.close()) }, 'CREATE LOBBY'))
+          h('p', { class: 'muted' }, 'Start a race lobby (or press Enter at any race marker). Everyone in your world gets 20 seconds to join, then you all race on one grid against the same AI opponents.'),
+          h(
+            'div',
+            { class: 'row' },
+            raceSel,
+            h(
+              'button',
+              {
+                class: 'btn primary focusable',
+                ...(st.state === 'connected' && !net.lobby ? {} : { disabled: '' }),
+                onclick: () => {
+                  const def = game.events.races.find((r) => r.id === raceSel.value);
+                  if (def) game.createOnlineRace(def);
+                },
+              },
+              'CREATE LOBBY'
+            )
+          )
         ),
         h('div', { class: 'online-right' }, h('div', { class: 'sec-title' }, 'WORLD CHAT'), chatLog, chatInput)
       )
@@ -773,9 +789,26 @@ export class Menus {
   }
 
   // ------------------------------------------------------------ event start prompt
-  eventIntro(def, onStart, onCancel) {
+  // `online` (game.inviteOption): other drivers are around, so the race can be shared
+  eventIntro(def, onStart, onCancel, online = null) {
     const game = this.game;
     const rec = game.save.data.raceRecords[def.id];
+    const actions = online
+      ? [
+          online.busy ? null : h('button', { class: 'btn primary focusable', onclick: online.invite }, 'INVITE & RACE'),
+          h('button', { class: 'btn' + (online.busy ? ' primary' : '') + ' focusable', onclick: onStart }, 'RACE SOLO'),
+          h('button', { class: 'btn focusable', onclick: onCancel }, 'CANCEL'),
+        ]
+      : [h('button', { class: 'btn primary focusable', onclick: onStart }, 'START RACE'), h('button', { class: 'btn focusable', onclick: onCancel }, 'CANCEL')];
+    const note = online
+      ? h(
+          'p',
+          { class: 'muted' },
+          online.busy
+            ? 'An online race is already open in this world: join it with J, or race this one solo.'
+            : `Invite the ${online.drivers} other driver${online.drivers > 1 ? 's' : ''} in this world: everyone who joins races on one grid against the same AI opponents.`
+        )
+      : null;
     const el = h(
       'div',
       { class: 'screen dialog-screen' },
@@ -794,7 +827,8 @@ export class Menus {
           h('div', {}, h('span', {}, 'Opponents'), h('b', {}, String(def.ai))),
           h('div', {}, h('span', {}, 'Your best'), h('b', {}, rec ? `${formatTime(rec.time)} (${ordinal(rec.pos)})` : '—'))
         ),
-        h('div', { class: 'dialog-actions' }, h('button', { class: 'btn primary focusable', onclick: onStart }, 'START RACE'), h('button', { class: 'btn focusable', onclick: onCancel }, 'CANCEL'))
+        note,
+        h('div', { class: 'dialog-actions' }, actions)
       )
     );
     this.mount(el);

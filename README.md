@@ -189,7 +189,13 @@ seconds without drag movement, the camera smoothly returns to its normal driving
   (`src/net/sync.js`). Each state carries the moment it was true. Receivers predict forward
   from its velocity, acceleration and turn rate, stop the prediction at walls, and blend
   corrections in. Cars send when that prediction would drift (up to 30 Hz in a small world).
-  The clock sync trusts only the fastest pings. Remote cars have nametags and engine sounds. The nearest
+  The clock sync trusts only the fastest pings. Remote cars have nametags and engine sounds.
+- **Online races:** at any race marker, **INVITE & RACE** opens a 20 s lobby for everyone in the
+  world. Players join with J, and the host's J starts the race at once. Everyone races on one
+  grid against the same AI opponents. One member's game drives them and streams them like
+  players (everyone else, spectators included, draws them). If that member leaves or goes
+  quiet, another takes the opponents over mid-race. Standings and results include the
+  opponents. In online races players are ghosts to the other cars, and menus don't pause. The nearest
   ten use their real model, farther ones a single instanced stand-in, and beyond 2.5 km they
   appear only on the map. Time of day follows the server clock, so everyone shares one sky.
   Also includes chat and **Horizon Open** online races: the host starts a lobby, others press J

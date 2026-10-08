@@ -5,9 +5,23 @@ const _dv = new THREE.Vector3();
 import { clamp, formatTime } from '../core/math.js';
 import { AIDriver, drivatarNames } from './ai.js';
 import { Vehicle } from '../vehicle/vehicle.js';
-import { CARS } from '../vehicle/carspecs.js';
+import { CARS, CAR_BY_ID } from '../vehicle/carspecs.js';
 import { PAINTS } from '../vehicle/carspecs.js';
 import { fogUniforms } from '../world/sky.js';
+
+// Grid places (0 = pole) for `humans` players and `npcs` AI opponents: the players start
+// together near the back, as a solo player always has (third from last).
+export function gridSlots(humans, npcs) {
+  const total = humans + npcs;
+  const first = Math.min(total - humans, Math.max(0, total - humans - 2));
+  const human = [],
+    npc = [];
+  for (let k = 0; k < total; k++) (k >= first && k < first + humans ? human : npc).push(k);
+  return { human, npc };
+}
+
+// how much a racer still has to run, at the pace it has kept so far
+const projectFinish = (A, r) => A.raceTime + (A.total - r.dist) / Math.max(8, (r.dist - (r.startDist ?? 0)) / Math.max(1, A.raceTime));
 
 // ------------------------------------------------------------------ driving line
 const lineVert = /* glsl */ `
@@ -163,45 +177,82 @@ export class RaceManager {
     return !!this.active;
   }
 
+  // AI opponents for an event, from the player's performance class (single-seaters only
+  // race each other). Online, the host sends this roster so every client has the same field.
+  makeRoster(def) {
+    const game = this.game;
+    const spec = game.player.spec;
+    const formula = !!spec.formula;
+    const pool = CARS.filter((c) => !!c.formula === formula && (formula || Math.abs(c.pi - spec.pi) < 170));
+    const base = Number(game.settings.aiSkill) || 0.93;
+    return drivatarNames(def.ai, Math.floor(Math.random() * 1000)).map((name) => ({
+      name,
+      car: (pool.length ? pool[Math.floor(Math.random() * pool.length)] : spec).id,
+      paint: PAINTS[Math.floor(Math.random() * PAINTS.length)],
+      skill: clamp(base + (Math.random() - 0.5) * 0.06, 0.8, 1.05),
+    }));
+  }
+
+  // An AI opponent's car and driver (roster entry o, opponent number i), placed by `place`.
+  spawnOpponent(o, i, route, place) {
+    const game = this.game;
+    const v = new Vehicle(CAR_BY_ID[o.car] || game.player.spec, game.world, { color: o.paint });
+    game.scene.add(v.root);
+    place(v);
+    const ai = new AIDriver(v, route, { skill: o.skill, lane: ((((i * 0.618) % 1) + 1) % 1 - 0.5) * 2, name: o.name });
+    game.vehicles.push(v);
+    return { v, ai, npc: i, name: o.name, isPlayer: false, dist: 0, hint: -1, lap: 0, lastS: 0, finished: false, time: 0 };
+  }
+
+  // Solo: this client's own opponents. Online (opts.online): the players on opts.grid and
+  // the opponents of opts.npcs share the grid; only the member driving the opponents
+  // (opts.authority) builds them here, everyone else draws them as the world streams them.
   start(def, opts = {}) {
     const game = this.game;
     this.cleanup();
     const route = def.route;
     const player = game.player;
     const racers = [];
-    const nAI = opts.online ? 0 : def.ai;
-    // opponents from a similar performance class (single-seaters only race each other)
-    const pPI = player.spec.pi;
-    const formula = !!player.spec.formula;
-    const pool = CARS.filter((c) => !!c.formula === formula && (formula || Math.abs(c.pi - pPI) < 170));
-    const names = drivatarNames(nAI, Math.floor(Math.random() * 1000));
-    const lanesTotal = opts.online ? Math.max(opts.gridSize || 1, (opts.gridIndex ?? 0) + 1) : nAI + 1;
-    const gridIndexPlayer = opts.online ? opts.gridIndex ?? 0 : Math.min(lanesTotal - 1, Math.max(0, lanesTotal - 3));
-    const gridPos = (k) => {
-      const row = Math.floor(k / 2),
-        col = k % 2;
-      const back = (def.closed ? 0 : 36) - 6 - row * 8.5;
+    const online = !!opts.online;
+    const roster = online ? opts.npcs || [] : this.makeRoster(def);
+    const humans = online ? opts.grid.length : 1;
+    const slots = gridSlots(humans, roster.length);
+    const spot = (back, col) => {
       const pt = route.pointAt(back, 0, 0, {});
       const lat = def.type === 'drag' ? (col ? 3.2 : -3.2) : (col ? 1 : -1) * Math.min(3, pt.w / 2 - 1.8);
       return { x: pt.x - pt.tz * lat, z: pt.z + pt.tx * lat, h: Math.atan2(pt.tx, pt.tz), s: back };
     };
-    let aiIdx = 0;
-    for (let k = 0; k < lanesTotal; k++) {
-      const gp = gridPos(k);
-      if (k === gridIndexPlayer) {
-        player.place(gp.x, gp.z, gp.h);
-        racers.push({ v: player, name: game.save?.data.name || 'You', isPlayer: true, dist: gp.s, hint: -1, lap: 0, lastS: gp.s, finished: false, time: 0, checkpoints: 0 });
-      } else if (!opts.online) {
-        const spec = pool.length ? pool[Math.floor(Math.random() * pool.length)] : player.spec;
-        const v = new Vehicle(spec, game.world, { color: PAINTS[Math.floor(Math.random() * PAINTS.length)] });
-        game.scene.add(v.root);
-        v.place(gp.x, gp.z, gp.h);
-        const skill = clamp((Number(game.settings.aiSkill) || 0.93) + (Math.random() - 0.5) * 0.06, 0.8, 1.05);
-        const ai = new AIDriver(v, route, { skill, lane: (Math.random() - 0.5) * 2, name: names[aiIdx++] });
-        game.vehicles.push(v);
-        racers.push({ v, ai, name: ai.name, isPlayer: false, dist: gp.s, hint: -1, lap: 0, lastS: gp.s, finished: false, time: 0 });
+    // a car on this spot touches nothing static (front, middle and back of it)
+    const clear = (p) => {
+      const cw = game.collision;
+      if (!cw) return true;
+      const fx = Math.sin(p.h),
+        fz = Math.cos(p.h);
+      for (const k of [-1.6, 0, 1.6]) {
+        const x = p.x + fx * k,
+          z = p.z + fz * k;
+        if (cw.clearance(x, z, game.world.height(x, z)) < 1.2) return false;
       }
+      return true;
+    };
+    // Rows of two from the line backwards, 8.5 m apart; a row that would put a car on a
+    // building, pole or wall moves further back until both its spots are clear.
+    const rows = [];
+    for (let row = 0, back = (def.closed ? 0 : 36) - 6; row * 2 < slots.human.length + slots.npc.length; row++, back -= 8.5) {
+      for (let tries = 0; tries < 15 && !(clear(spot(back, 0)) && clear(spot(back, 1))); tries++) back -= 2;
+      rows.push(back);
     }
+    const gridPos = (k) => spot(rows[Math.floor(k / 2)], k % 2);
+    const me = gridPos(slots.human[online ? Math.max(0, opts.grid.indexOf(game.net.id)) : 0]);
+    player.place(me.x, me.z, me.h);
+    racers.push({ v: player, name: game.save?.data.name || 'You', isPlayer: true, dist: me.s, hint: -1, lap: 0, lastS: me.s, finished: false, time: 0, checkpoints: 0 });
+    if (!online || opts.authority)
+      roster.forEach((o, i) => {
+        const gp = gridPos(slots.npc[i]);
+        const r = this.spawnOpponent(o, i, route, (v) => v.place(gp.x, gp.z, gp.h));
+        r.dist = r.lastS = gp.s;
+        racers.push(r);
+      });
     // driving line + gates
     const profile = route.speedProfile(player.spec.grip, player.spec.topKmh / 3.6, 7.5);
     const line = buildDrivingLine(route, profile, game.world);
@@ -237,7 +288,7 @@ export class RaceManager {
       finishGate,
       checkpoints,
       state: 'intro',
-      timer: opts.online ? Math.max(0.5, (opts.startAt - game.net.serverNow()) / 1000 - 3) : 3.2,
+      timer: online ? Math.max(0.5, (opts.startAt - game.net.serverNow()) / 1000 - 3) : 3.2,
       raceTime: 0,
       startS,
       total: def.closed ? route.length * def.laps : route.length - 1.5,
@@ -245,9 +296,10 @@ export class RaceManager {
       wrongWay: 0,
       offTrack: 0,
       lastPlayerPos: 1,
-      online: !!opts.online,
+      online,
+      authority: online && !!opts.authority, // this client drives the shared opponents
       onlineStartAt: opts.startAt,
-      gridSize: opts.gridSize || 1,
+      gridSize: humans + roster.length,
       finishOrder: [],
       lapStart: 0,
       bestLap: Infinity,
@@ -342,10 +394,11 @@ export class RaceManager {
       A.raceTime += dt;
       // AI
       const others = A.others || (A.others = A.racers.map((r) => r.v));
+      const pace = A.online ? this.playersProgress(player) : player.dist;
       for (const r of A.racers) {
         if (r.ai && !r.finished) {
-          // rubber banding relative to the player
-          const gap = r.dist - player.dist;
+          // rubber banding relative to the player (online: the players on average)
+          const gap = r.dist - pace;
           r.ai.rubber = clamp(1 - gap / 900, 0.9, 1.08);
           r.ai.update(dt, { others, racing: true });
         } else if (r.ai && r.finished) {
@@ -413,8 +466,12 @@ export class RaceManager {
       if (A.state === 'finishing') {
         A.timer -= dt;
         if (A.online) {
-          // wait for the server's final results (fallback after a minute)
-          if (A.timer < -60) this.showResults();
+          // wait for everyone (the world sends the results); keep driving any opponents
+          // meanwhile. A lost connection ends it here after five minutes.
+          if (A.timer < -300) {
+            game.net.leaveRace();
+            this.showResults();
+          }
         } else if (A.timer <= 0 || A.racers.every((r) => r.finished)) this.showResults();
       }
       A.line.material.uniforms.uPlayerS.value = this.lapLocal(pr.dist);
@@ -425,6 +482,65 @@ export class RaceManager {
       A.hudT = 1 / 12;
       this.updateHUD();
     }
+  }
+
+  // online: the players' average progress (this one live, the others as the world last said)
+  playersProgress(player) {
+    const members = this.game.net.standings?.members || [];
+    let sum = player.dist,
+      n = 1;
+    for (const m of members)
+      if (m.id !== this.game.net.id) {
+        sum += m.d;
+        n++;
+      }
+    return sum / n;
+  }
+
+  // the opponents' progress for the world's standings: [i, distance, lap, done, time, eta]
+  opponentProgress() {
+    const A = this.active;
+    const out = [];
+    for (const r of A.racers) if (r.npc != null) out.push([r.npc, Math.round(r.dist * 10) / 10, this.lapIndex(r.dist), r.finished ? 1 : 0, r.finished ? r.time : 0, r.finished ? null : Math.round(projectFinish(A, r) * 100) / 100]);
+    return out;
+  }
+
+  // This client now drives the opponents (their driver left or went quiet): each car is
+  // taken over where it is drawn now, with its race progress. cars: [{ npc, pos, quat,
+  // vel, d, lap, done, time }]
+  adoptOpponents(cars) {
+    const A = this.active;
+    if (!A || !A.online || A.authority) return;
+    A.authority = true;
+    const frozen = A.state === 'intro' || A.state === 'countdown';
+    for (const c of cars) {
+      const r = this.spawnOpponent(c.npc, c.npc.i, A.route, (v) => {
+        v.place(c.pos.x, c.pos.z, Math.atan2(2 * (c.quat.x * c.quat.z + c.quat.w * c.quat.y), 1 - 2 * (c.quat.x ** 2 + c.quat.y ** 2)));
+        v.physics.pos.copy(c.pos);
+        v.physics.quat.copy(c.quat);
+        v.physics.vel.copy(c.vel);
+        v.saveState();
+      });
+      Object.assign(r, { dist: c.d || A.startS, lastS: c.d || A.startS, startDist: A.startS, lap: c.lap || 0, finished: !!c.done, time: c.time || 0 });
+      r.v.physics.frozen = frozen;
+      A.racers.push(r);
+    }
+    A.others = null;
+  }
+
+  // ... and hands them back (another member drives them now)
+  releaseOpponents() {
+    const A = this.active;
+    if (!A || !A.authority) return;
+    A.authority = false;
+    const game = this.game;
+    for (const r of [...A.racers])
+      if (r.npc != null) {
+        r.v.dispose();
+        game.vehicles.splice(game.vehicles.indexOf(r.v), 1);
+        A.racers.splice(A.racers.indexOf(r), 1);
+      }
+    A.others = null;
   }
 
   lapIndex(d) {
@@ -485,12 +601,12 @@ export class RaceManager {
     const pos = A.online ? game.net.racePosition() : this.position(player);
     const st = this.standings();
     const lapTxt = A.def.closed ? `<span><b>LAP</b>${Math.min(A.def.laps, player.lap + 1)}/${A.def.laps}</span>` : `<span><b>DIST</b>${(Math.max(0, A.total - player.dist) / 1000).toFixed(1)} km</span>`;
-    const others = game.net?.raceStandings?.();
+    const others = A.online ? game.net.raceStandings() : null;
     const list = st
       .slice(0, 8)
       .map((r, i) => `<div class="${r.isPlayer ? 'me' : ''}"><i>${i + 1}</i>${escapeHtml(r.name)}</div>`)
       .join('');
-    const total = A.online ? game.net.standings?.members?.length || A.gridSize || 1 : A.racers.length;
+    const total = A.online ? game.net.raceTotal() || A.gridSize : A.racers.length;
     game.hud.setRaceInfo(
       `<div class="pos">${pos}<small>/${total}</small></div><div class="row">${lapTxt}<span><b>TIME</b>${formatTime(A.raceTime)}</span>${
         isFinite(A.bestLap) ? `<span><b>BEST LAP</b>${formatTime(A.bestLap)}</span>` : ''
@@ -529,7 +645,7 @@ export class RaceManager {
     // project finishing times for racers still on track
     for (const r of A.racers)
       if (!r.finished && r.dist > 10) {
-        r.time = A.raceTime + (A.total - r.dist) / Math.max(8, (r.dist - (r.startDist ?? 0)) / Math.max(1, A.raceTime));
+        r.time = projectFinish(A, r);
         r.finished = true;
         r.projected = true;
       }

@@ -117,6 +117,10 @@ export class NetClient {
     this.noteTimer = null;
     this.lobby = null;
     this.standings = null;
+    // the world's running race: { id, ai (who drives its AI opponents), npcs (their roster) }
+    this.racing = null;
+    this.npcSend = new Map(); // opponent number -> send state, while this client drives them
+    this.npcAt = 0;
     this.proxies = null;
     this._ranked = [];
     this.tagLayer = document.createElement('div');
@@ -164,7 +168,14 @@ export class NetClient {
       full: 'Every world is full — playing solo',
       outdated: 'A new version is live — reload the page to go online',
     };
-    return { state: this.state, label: labels[this.state], players: [...this.players.values()].map((p) => ({ name: p.name, car: p.car, paint: p.paint })) };
+    return { state: this.state, label: labels[this.state], players: [...this.players.values()].filter((p) => !p.npc).map((p) => ({ name: p.name, car: p.car, paint: p.paint })) };
+  }
+
+  // other people in the world (not the AI opponents of a race)
+  humanCount() {
+    let n = 0;
+    for (const p of this.players.values()) if (!p.npc) n++;
+    return n;
   }
 
   connect() {
@@ -308,6 +319,8 @@ export class NetClient {
     if (this.proxies) this.proxies.count = 0;
     this.notes.join.length = this.notes.leave.length = 0;
     this.lobby = null;
+    this.racing = null;
+    this.npcSend.clear();
     // the reload banner arrives just before the server closes the socket: keep it up
     if (this.state !== 'outdated') this.banner.classList.remove('on');
   }
@@ -335,8 +348,16 @@ export class NetClient {
         this.everConnected = true;
         this.lastWorld = m.world;
         if (m.race) this.onLobby(m.race);
+        // a race already under way: watch its opponents too
+        if (m.race?.state === 'running') {
+          this.racing = { id: m.race.id, ai: m.race.ai, npcs: m.race.npcs };
+          this.showOpponents(m.race.npcs);
+        }
         break;
       }
+      case 'rai':
+        this.onRaceAI(m);
+        break;
       case 'full':
         if (m.next) {
           this.world = m.next;
@@ -428,6 +449,9 @@ export class NetClient {
         this.standings = m.race;
         break;
       case 'rend':
+        this.hideOpponents();
+        this.racing = null;
+        this.npcSend.clear();
         this.onRaceEnd(m);
         break;
     }
@@ -467,6 +491,7 @@ export class NetClient {
       name: info.name,
       car: info.car,
       paint: info.paint,
+      npc: !!info.npc, // a race's AI opponent, driven by another player's game
       motion,
       // the pose drawn (models, stand-ins, tags, effects and collisions all read these)
       pos: motion.pos,
@@ -577,8 +602,17 @@ export class NetClient {
 
   mapPlayers() {
     const out = [];
-    for (const p of this.players.values()) if (p.visible) out.push({ x: p.pos.x, z: p.pos.z, name: p.name, color: p.paint });
+    for (const p of this.players.values()) if (p.visible) out.push({ x: p.pos.x, z: p.pos.z, name: p.name, color: p.npc ? '#ffd21f' : p.paint });
     return out;
+  }
+
+  // a race's AI opponents, drawn from the states their driver streams (everyone but that driver)
+  showOpponents(npcs = []) {
+    for (const n of npcs) if (!this.players.has(n.id)) this.addPlayer({ id: n.id, name: n.name, car: n.car, paint: n.paint, npc: true });
+  }
+
+  hideOpponents() {
+    for (const p of [...this.players.values()]) if (p.npc) this.removePlayer(p.id);
   }
 
   // ------------------------------------------------------------ per frame
@@ -621,10 +655,46 @@ export class NetClient {
     this.gate.sent(now, st);
   }
 
+  // While this client drives a race's AI opponents: their states for the world, batched
+  // (at most 20 Hz), each opponent sent when the others' prediction of it would drift.
+  sendOpponents(dt) {
+    const A = this.game.race.active;
+    if (!A?.online || !A.authority) return;
+    const g = this.game;
+    const hz = Math.min(20, this.maxHz);
+    const now = localNow();
+    const slot = now - this.npcAt >= 1000 / hz;
+    const batch = [];
+    for (const r of A.racers) {
+      if (r.npc == null) continue;
+      const ph = r.v.physics;
+      let s = this.npcSend.get(r.npc);
+      if (!s) this.npcSend.set(r.npc, (s = { gate: new SendGate(), acc: new THREE.Vector3(), prevVel: ph.vel.clone(), st: {} }));
+      if (dt > 0) {
+        const k = 1 - Math.exp(-dt / 0.08);
+        s.acc.x += (THREE.MathUtils.clamp((ph.vel.x - s.prevVel.x) / dt, -30, 30) - s.acc.x) * k;
+        s.acc.z += (THREE.MathUtils.clamp((ph.vel.z - s.prevVel.z) / dt, -30, 30) - s.acc.z) * k;
+        s.prevVel.copy(ph.vel);
+      }
+      if (!slot) continue;
+      const f = (ph.input.brake > 0.1 ? 1 : 0) | (g.env.lightsOn ? 2 : 0) | (ph.gear < 0 ? 4 : 0) | 8;
+      const w = ph.wheels.map(wheelCode);
+      Object.assign(s.st, { pos: ph.pos, quat: ph.quat, vel: ph.vel, angVel: ph.angVel, acc: s.acc, steer: ph.steerAngle, key: `${ph.gear}|${f}|${w.map(wheelLook).join('')}` });
+      if (!s.gate.due(now, s.st, hz)) continue;
+      // [i, ts, pos, quat, vel, angVel, acc(x z), steer, flags, rpm, gear, wheels]
+      batch.push([r.npc, Math.round(this.clock.now(now)), r2(ph.pos.x), r2(ph.pos.y), r2(ph.pos.z), r3(ph.quat.x), r3(ph.quat.y), r3(ph.quat.z), r3(ph.quat.w), r2(ph.vel.x), r2(ph.vel.y), r2(ph.vel.z), r3(ph.angVel.x), r3(ph.angVel.y), r3(ph.angVel.z), r2(s.acc.x), r2(s.acc.z), r2(ph.steerAngle), f, Math.round(ph.rpm), ph.gear, ...w]);
+      s.gate.sent(now, s.st);
+    }
+    if (!slot) return;
+    this.npcAt = now;
+    if (batch.length) this.send({ t: 'n', s: batch });
+  }
+
   update(dt) {
     if (this.state !== 'connected') return;
     const g = this.game;
     this.sendState(dt);
+    this.sendOpponents(dt);
     const cam = g.camera;
     // every other car where it is now (predicted from its newest state)
     const now = this.serverNow();
@@ -707,12 +777,14 @@ export class NetClient {
     }
     // lobby banner countdown
     if (this.lobby && this.lobby.state === 'lobby') {
-      const secs = Math.max(0, Math.ceil((this.lobby.startAt - this.serverNow()) / 1000));
-      const def = g.events.races.find((r) => r.id === this.lobby.ev);
-      const mine = this.lobby.members.some((m) => m.id === this.id);
-      this.banner.innerHTML = mine
-        ? `HORIZON OPEN · ${escapeHtml(def?.name || '')} · ${this.lobby.members.length} racer${this.lobby.members.length > 1 ? 's' : ''} · starts in ${secs}s`
-        : `${escapeHtml(this.lobby.hostName)} started <b>${escapeHtml(def?.name || '')}</b> · press <kbd>J</kbd> to join · ${secs}s`;
+      const L = this.lobby;
+      const secs = Math.max(0, Math.ceil((L.startAt - this.serverNow()) / 1000));
+      const def = g.events.races.find((r) => r.id === L.ev);
+      const n = L.members.length;
+      const field = `${n} racer${n > 1 ? 's' : ''}${L.opponents ? ` + AI` : ''}`;
+      if (L.host === this.id) this.banner.innerHTML = `HORIZON OPEN · ${escapeHtml(def?.name || '')} · ${field} · starts in ${secs}s · <kbd>J</kbd> start now`;
+      else if (L.members.some((m) => m.id === this.id)) this.banner.innerHTML = `HORIZON OPEN · ${escapeHtml(def?.name || '')} · ${field} · you're in · starts in ${secs}s · <kbd>J</kbd> leave`;
+      else this.banner.innerHTML = `${escapeHtml(L.hostName)} invites you to <b>${escapeHtml(def?.name || '')}</b> · ${field} · <kbd>J</kbd> join · ${secs}s`;
       this.banner.classList.add('on');
     } else if (!this.lobby) this.banner.classList.remove('on');
     // race progress
@@ -811,12 +883,21 @@ export class NetClient {
   }
 
   // ------------------------------------------------------------ online races
-  createRace(evId) {
-    this.send({ t: 'rcreate', ev: evId });
+  // A shared race: the host opens a lobby for an event with a roster of AI opponents
+  // (createRace), others join with J until it starts (the host's J starts it at once).
+  // Every member races on one grid against the same opponents: the member the world picks
+  // (racing.ai) simulates them and streams them, everyone else draws them.
+  createRace(evId, npcs = []) {
+    this.send({ t: 'rcreate', ev: evId, npcs });
   }
 
+  // J: join an open lobby; in it, leave it; the host starts it now
   joinRace() {
-    if (this.lobby && this.lobby.state === 'lobby') this.send({ t: 'rjoin', id: this.lobby.id });
+    const L = this.lobby;
+    if (!L || L.state !== 'lobby') return;
+    if (L.host === this.id) this.send({ t: 'rgo' });
+    else if (L.members.some((m) => m.id === this.id)) this.send({ t: 'rleave' });
+    else this.send({ t: 'rjoin', id: L.id });
   }
 
   leaveRace() {
@@ -827,26 +908,55 @@ export class NetClient {
     const wasMine = this.lobby?.members?.some((m) => m.id === this.id);
     this.lobby = race;
     const mine = race.members.some((m) => m.id === this.id);
-    if (!wasMine && mine) this.game.hud.toast('HORIZON OPEN', 'You are in the lobby — get ready!', 'purple', 3000);
-    else if (!mine && race.state === 'lobby' && race.host !== this.id && !this._announced?.has(race.id)) {
-      this._announced = this._announced || new Set();
-      this._announced.add(race.id);
+    if (!wasMine && mine && race.host !== this.id) this.game.hud.toast('HORIZON OPEN', 'You are in the lobby — get ready!', 'purple', 3000);
+    else if (!mine && race.state === 'lobby' && !this._announced?.has(race.id)) {
+      (this._announced ||= new Set()).add(race.id);
+      const def = this.game.events.races.find((r) => r.id === race.ev);
+      this.game.hud.toast('RACE INVITE', `${race.hostName} is starting ${def?.name || 'a race'} — press J to join`, 'purple', 6000);
       this.game.audio.ui('notify');
     }
   }
 
   onRaceStart(m) {
     const g = this.game;
-    const idx = m.grid.indexOf(this.id);
+    this.racing = { id: m.id, ai: m.ai, npcs: m.npcs || [] };
+    this.npcSend.clear();
     this.banner.classList.remove('on');
-    if (idx < 0) {
-      this.lobby = { ...this.lobby, state: 'running' };
-      return;
-    }
+    this.lobby = { ...this.lobby, state: 'running' };
+    if (m.ai !== this.id) this.showOpponents(this.racing.npcs);
+    if (!m.grid.includes(this.id)) return; // watching, not racing
     const def = g.events.races.find((r) => r.id === m.ev);
     if (!def) return;
-    this.lobby = { ...this.lobby, state: 'running' };
-    g.startRace(def, false, { online: true, gridIndex: idx, startAt: m.startAt, gridSize: m.grid.length });
+    g.startRace(def, false, { online: true, raceId: m.id, grid: m.grid, npcs: this.racing.npcs, startAt: m.startAt });
+  }
+
+  // The world moved the opponents to another member: take them over where they are
+  // drawn now, or hand them back and draw them again.
+  onRaceAI(m) {
+    const R = this.racing;
+    if (!R || R.id !== m.id) return;
+    const was = R.ai === this.id;
+    R.ai = m.ai;
+    const g = this.game;
+    const A = g.race.active;
+    if (m.ai === this.id && !was && A?.online) {
+      const prog = this.standings?.npcs || [];
+      const cars = [];
+      for (const npc of R.npcs) {
+        const p = this.players.get(npc.id);
+        if (!p?.motion.s) continue;
+        const s = prog.find((x) => x.id === npc.id) || {};
+        cars.push({ npc, pos: p.pos.clone(), quat: p.quat.clone(), vel: p.vel.clone(), d: s.d, lap: s.lap, done: s.done, time: s.time });
+      }
+      this.hideOpponents();
+      this.npcSend.clear();
+      g.race.adoptOpponents(cars);
+      g.hud.toast('HORIZON OPEN', 'Your game now drives the AI opponents for everyone', 'cyan', 3000);
+    } else if (was && m.ai !== this.id) {
+      g.race.releaseOpponents();
+      this.npcSend.clear();
+      this.showOpponents(R.npcs);
+    }
   }
 
   onRaceEnd(m) {
@@ -861,17 +971,32 @@ export class NetClient {
     if (!A) return;
     const me = A.racers.find((r) => r.isPlayer);
     this.send({ t: 'rprog', cp: A.nextCp, lap: me.lap, d: me.dist, done: done || me.finished, time: me.time });
+    if (A.authority) this.send({ t: 'rnpc', s: race.opponentProgress() });
+  }
+
+  // everyone in the race, players and opponents, in race order (this player's progress live)
+  raceRows() {
+    const st = this.standings;
+    if (!st) return null;
+    const me = this.game.race.active?.racers.find((r) => r.isPlayer);
+    const rows = st.members.map((m) => (m.id === this.id && me ? { ...m, me: true, d: me.dist, done: me.finished || m.done, time: me.finished ? me.time : m.time } : m));
+    for (const n of st.npcs || []) rows.push(n);
+    return rows.sort((a, b) => (a.done && b.done ? a.time - b.time : a.done ? -1 : b.done ? 1 : b.d - a.d));
   }
 
   raceStandings() {
-    if (!this.standings || !this.game.race.running || !this.game.race.active.online) return null;
-    const list = [...this.standings.members].sort((a, b) => (a.done && b.done ? a.time - b.time : a.done ? -1 : b.done ? 1 : b.d - a.d));
-    return list.map((m, i) => `<div class="${m.id === this.id ? 'me' : ''}"><i>${i + 1}</i>${escapeHtml(m.name)}</div>`).join('');
+    if (!this.game.race.active?.online) return null;
+    const rows = this.raceRows();
+    return rows && rows.slice(0, 8).map((m, i) => `<div class="${m.me ? 'me' : ''}"><i>${i + 1}</i>${escapeHtml(m.name)}</div>`).join('');
   }
 
   racePosition() {
-    if (!this.standings) return 1;
-    const list = [...this.standings.members].sort((a, b) => (a.done && b.done ? a.time - b.time : a.done ? -1 : b.done ? 1 : b.d - a.d));
-    return Math.max(1, list.findIndex((m) => m.id === this.id) + 1);
+    const rows = this.raceRows();
+    return rows ? Math.max(1, rows.findIndex((m) => m.me) + 1) : 1;
+  }
+
+  raceTotal() {
+    const st = this.standings;
+    return st ? st.members.length + (st.npcs?.length || 0) : 0;
   }
 }

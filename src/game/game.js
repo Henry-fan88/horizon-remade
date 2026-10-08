@@ -53,6 +53,8 @@ export const QUALITY = {
 
 const nextFrame = () => new Promise((r) => requestAnimationFrame(() => r()));
 
+const NO_DRIVING = { throttle: 0, brake: 0, steer: 0, handbrake: 0 };
+
 function resolveVehiclePairSafe(a, b) {
   if (a.frozen || b.frozen) return 0;
   return resolveVehiclePair(a, b, false);
@@ -373,7 +375,7 @@ export class Game {
   updateTitleStatus() {
     const el = this.menus.titleEl?.querySelector('.net-status');
     const n = this.net;
-    if (el) el.textContent = n.state === 'connected' ? `● ONLINE · World ${n.world} · ${n.players.size + 1} driving` : n.state === 'connecting' || n.state === 'reconnecting' ? 'Connecting…' : n.state === 'outdated' ? 'New version — reload to go online' : '● OFFLINE · solo';
+    if (el) el.textContent = n.state === 'connected' ? `● ONLINE · World ${n.world} · ${n.humanCount() + 1} driving` : n.state === 'connecting' || n.state === 'reconnecting' ? 'Connecting…' : n.state === 'outdated' ? 'New version — reload to go online' : '● OFFLINE · solo';
   }
 
   startFromTitle() {
@@ -414,9 +416,15 @@ export class Game {
     }
   }
 
+  // An online race doesn't stop for one player's menu (others, and the AI opponents this
+  // game may be driving, race on); the car just gets no driving input meanwhile.
+  get pausesRace() {
+    return !this.race.active?.online;
+  }
+
   openPause(tab) {
     if (this.menus.open) return;
-    this.paused = true;
+    this.paused = this.pausesRace;
     this.menus.openPause(tab || 'festival');
     this.onMenuClosed = () => {
       this.paused = false;
@@ -426,7 +434,7 @@ export class Game {
   }
 
   openMap() {
-    this.paused = true;
+    this.paused = this.pausesRace;
     this.worldMap.show();
     this.audio.ui('select');
   }
@@ -456,7 +464,8 @@ export class Game {
       this.gpsRoute = null;
       this.gpsTarget = null;
       this.skills.bank();
-      this.race.start(def, opts);
+      // online: whether this game drives the AI opponents is the world's latest word
+      this.race.start(def, opts.online ? { ...opts, authority: this.net.racing?.ai === this.net.id } : opts);
       this.repairPlayer();
       this.rewind.clear();
       this.hud.show(true);
@@ -516,8 +525,11 @@ export class Game {
     const idx = results.findIndex((r) => r.id === this.net.id);
     const pos = idx >= 0 ? idx + 1 : results.length;
     const me = results[idx];
-    const standings = results.map((r) => ({ name: r.name, isPlayer: r.id === this.net.id, time: r.time, finished: r.time !== null }));
-    this.onRaceFinished(A.def, pos, me && me.time, standings, A);
+    const standings = results.map((r) => ({ name: r.name, car: CAR_BY_ID[r.car]?.name || '', isPlayer: r.id === this.net.id, time: r.time, finished: r.time !== null }));
+    // the last finisher's results can arrive at once: let their finish line moment play first
+    const player = A.racers.find((r) => r.isPlayer);
+    const wait = player.finished ? Math.max(0, 4.5 - (A.raceTime - player.time)) : 0;
+    setTimeout(() => this.race.active === A && this.onRaceFinished(A.def, pos, me && me.time, standings, A), wait * 1000);
   }
 
   // ---------------------------------------------------------------- travel / GPS
@@ -625,6 +637,23 @@ export class Game {
     this.skills.add('BONUS BOARD', 500);
   }
 
+  // Online with other drivers around, an event can be raced together: null when racing
+  // alone is the only choice. `busy` when the world already has a race open or running.
+  inviteOption(def) {
+    const n = this.net;
+    if (n.state !== 'connected' || n.humanCount() === 0) return null;
+    return { drivers: n.humanCount(), busy: !!n.lobby, invite: () => this.createOnlineRace(def) };
+  }
+
+  // A shared race: a lobby everyone in the world is invited to (J to join; the host's J
+  // starts it at once), raced on one grid against the same AI opponents.
+  createOnlineRace(def) {
+    this.net.createRace(def.id, this.race.makeRoster(def));
+    this.menus.close();
+    this.paused = false;
+    this.hud.toast('RACE INVITE SENT', `${def.name} · drivers can join for 20 s · press J to start sooner`, 'purple', 5000);
+  }
+
   updateEventPrompts() {
     const p = this.player.physics.pos;
     let near = null;
@@ -645,7 +674,8 @@ export class Game {
           () => {
             this.menus.close();
             this.paused = false;
-          }
+          },
+          this.inviteOption(near)
         );
       }
     } else if (lobby) this.hud.setPrompt('<kbd>J</kbd> JOIN THE ONLINE RACE');
@@ -873,15 +903,17 @@ export class Game {
     const p = this.player.physics;
     const racing = this.race.active;
     const frozen = racing && (racing.state === 'intro' || racing.state === 'countdown');
-    const ctl = input.driving(dt);
+    // a menu or the map open over an online race: the keys belong to the menu
+    const inMenu = this.menus.open || this.worldMap.open;
+    const ctl = inMenu ? NO_DRIVING : input.driving(dt);
     p.input.throttle = frozen ? 0 : ctl.throttle;
     p.input.brake = frozen ? 1 : ctl.brake;
     p.input.steer = ctl.steer;
     p.input.handbrake = ctl.handbrake;
-    if (input.hit('shiftUp')) p.input.shiftUp = true;
-    if (input.hit('shiftDown')) p.input.shiftDown = true;
-    if (input.hit('camera')) this.gameCam.cycle();
-    if (!frozen && (input.hit('reset') || p.upsideTimer > 2.5)) {
+    if (!inMenu && input.hit('shiftUp')) p.input.shiftUp = true;
+    if (!inMenu && input.hit('shiftDown')) p.input.shiftDown = true;
+    if (!inMenu && input.hit('camera')) this.gameCam.cycle();
+    if (!frozen && ((!inMenu && input.hit('reset')) || p.upsideTimer > 2.5)) {
       if (racing) this.race.resetPlayerToTrack();
       else this.resetToRoad(this.player);
     }
@@ -896,9 +928,13 @@ export class Game {
         const imp = this.collision.resolveVehicle(v.physics);
         if (imp > 0) v.physics.lastImpact = Math.max(v.physics.lastImpact, imp);
       }
+      // In an online race players are ghosts to every other car, the shared AI opponents
+      // included (another member's game may be driving them); the opponents still collide
+      // with each other in the game that drives them.
       if (racing)
         for (let i = 0; i < this.vehicles.length; i++)
           for (let j = i + 1; j < this.vehicles.length; j++) {
+            if (racing.online && (this.vehicles[i] === this.player || this.vehicles[j] === this.player)) continue;
             const imp = resolveVehiclePairSafe(this.vehicles[i].physics, this.vehicles[j].physics);
             if (imp > 2 && (this.vehicles[i] === this.player || this.vehicles[j] === this.player)) {
               this.player.physics.lastImpact = Math.max(this.player.physics.lastImpact, imp * 0.6);
@@ -1093,7 +1129,7 @@ export class Game {
       const lp = this.progression.levelProgress();
       this.hud.setTopRight(
         `<div class="cr">${formatNumber(d.credits)} CR</div><div class="lvl">LEVEL ${lp.level} · ${Math.round(lp.frac * 100)}%</div>${
-          this.net.state === 'connected' ? `<div class="online">● ONLINE · WORLD ${this.net.world} · ${this.net.players.size + 1} DRIVER${this.net.players.size ? 'S' : ''}</div>` : ''
+          this.net.state === 'connected' ? `<div class="online">● ONLINE · WORLD ${this.net.world} · ${this.net.humanCount() + 1} DRIVER${this.net.humanCount() ? 'S' : ''}</div>` : ''
         }`
       );
     }
@@ -1110,7 +1146,7 @@ export class Game {
       o.ai = ai;
       others.push(o);
     };
-    for (const o of this.net.players.values()) if (o.visible) dot(o.pos.x, o.pos.z, o.paint, false);
+    for (const o of this.net.players.values()) if (o.visible) dot(o.pos.x, o.pos.z, o.npc ? '#ffd21f' : o.paint, o.npc);
     if (this.race.active) for (const r of this.race.active.racers) if (!r.isPlayer) dot(r.v.physics.pos.x, r.v.physics.pos.z, '#ffd21f', true);
     const A = this.race.active;
     const h = this._hudState || (this._hudState = {});

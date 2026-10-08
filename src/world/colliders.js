@@ -377,6 +377,25 @@ export class CollisionWorld {
     return impact;
   }
 
+  // Distance from (x, z) at height y to the nearest static shape (negative inside), up to max.
+  clearance(x, z, y, max = 4) {
+    const cand = this.query(this.grid, this.statics, x, z, max, (this._clear ||= []));
+    let best = max;
+    for (const i of cand) {
+      const s = this.statics[i];
+      if (y + 1 < s.y0 || y > s.y1) continue;
+      let d;
+      if (s.type === 0) d = Math.hypot(s.x - x, s.z - z) - s.r;
+      else {
+        const u = Math.abs((x - s.x) * s.c + (z - s.z) * s.s) - s.hx,
+          v = Math.abs(-(x - s.x) * s.s + (z - s.z) * s.c) - s.hz;
+        d = u > 0 && v > 0 ? Math.hypot(u, v) : Math.max(u, v);
+      }
+      best = Math.min(best, d);
+    }
+    return best;
+  }
+
   // How far a car of radius `rad` at height `y` can move along (x0, z0) -> (x1, z1) before
   // touching static geometry, as a fraction 0..1 (1 = clear). Shapes it already touches at
   // the start are ignored, so a car sliding along a wall keeps sliding. (Other players'

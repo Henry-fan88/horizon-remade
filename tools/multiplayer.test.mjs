@@ -286,6 +286,99 @@ test('cars may send faster in a small world, slower as it fills', (t) => {
   assert.equal(first.s.last('rate').hz, 29);
 });
 
+// an opponent's state as the member driving them streams it: [i, ts, ...fields]
+const npcState = (i, x, ts = Date.now()) => [i, ts, x, 1, 2, 0, 0, 0, 1, 20, 0, 0, 0, 0.1, 0, 1, 0, 0.05, 0, 6000, 4, 8010, 8010, 8020, 8020];
+const roster = (n) => Array.from({ length: n }, (_, i) => ({ name: 'AI ' + i, car: 'gt3', paint: '#1f5fff', skill: 0.95 }));
+
+test('shared race: one grid of players plus the AI opponents everyone sees', (t) => {
+  const w = new World();
+  t.after(() => w.stop());
+  const host = join(w, 'Host');
+  const guest = join(w, 'Guest');
+  const watcher = join(w, 'Watcher');
+  w.message(host.c, JSON.stringify({ t: 'rcreate', ev: 'festival', npcs: roster(7) }));
+  const lobby = guest.s.last('rlobby').race;
+  assert.equal(lobby.opponents, 7);
+  w.message(guest.c, JSON.stringify({ t: 'rjoin', id: lobby.id }));
+  w.message(guest.c, JSON.stringify({ t: 'rgo' }));
+  assert.equal(w.race.state, 'lobby', 'only the host can start early');
+  w.message(host.c, JSON.stringify({ t: 'rgo' }));
+  const start = watcher.s.last('rstart');
+  assert.deepEqual(start.grid, [host.c.id, guest.c.id]);
+  assert.equal(start.npcs.length, 6, 'two players + six opponents = the event field of eight');
+  assert.equal(start.ai, host.c.id, 'the host drives the opponents');
+  assert.ok(start.npcs.every((n) => n.id < 0 && n.car === 'gt3' && n.name.startsWith('AI ')));
+  // only the opponents' driver may stream them; everyone in the world gets them
+  w.message(guest.c, JSON.stringify({ t: 'n', s: [npcState(0, 99)] }));
+  w.tick();
+  assert.equal(watcher.s.last('snap'), undefined);
+  w.message(host.c, JSON.stringify({ t: 'n', s: [npcState(0, 100), npcState(1, 104)] }));
+  w.tick();
+  const snap = watcher.s.last('snap');
+  const e0 = snap.s.find((e) => e[S.id] === start.npcs[0].id);
+  assert.equal(e0[S.pos], 100);
+  assert.deepEqual(e0.slice(S.wheels, S.wheels + 4), [8010, 8010, 8020, 8020]);
+  assert.ok(snap.s.some((e) => e[S.id] === start.npcs[1].id));
+  // their progress is in the standings
+  w.message(host.c, JSON.stringify({ t: 'rnpc', s: [[0, 850, 0, 0, 0, 95], [1, 900, 0, 1, 80.5, null]] }));
+  w.race._lastStand = 0;
+  w.tick();
+  const stand = guest.s.last('rstand').race;
+  assert.equal(stand.npcs[0].d, 850);
+  assert.equal(stand.npcs[1].done, true);
+  assert.equal(stand.npcs[1].time, 80.5);
+});
+
+test('shared race: the opponents move to another member when their driver leaves or goes quiet', (t) => {
+  const w = new World();
+  t.after(() => w.stop());
+  const a = join(w, 'A');
+  const b = join(w, 'B');
+  const c = join(w, 'C');
+  w.message(a.c, JSON.stringify({ t: 'rcreate', ev: 'festival', npcs: roster(3) }));
+  for (const p of [b, c]) w.message(p.c, JSON.stringify({ t: 'rjoin', id: w.race.id }));
+  w.message(a.c, JSON.stringify({ t: 'rgo' }));
+  assert.equal(w.race.npcs.length, 1, 'three players leave room for one of three opponents');
+  w.raceLeave(a.c);
+  assert.equal(b.s.last('rai').ai, b.c.id, 'the next member takes them');
+  assert.equal(w.race.host, b.c.id, 'and hosting');
+  // B goes quiet (hidden tab): after a while C takes over
+  w.race.aiAt = Date.now() - 3000;
+  w.tick();
+  assert.equal(c.s.last('rai').ai, c.c.id);
+  // C streams; B's late messages no longer count
+  w.message(b.c, JSON.stringify({ t: 'n', s: [npcState(0, 1)] }));
+  w.message(c.c, JSON.stringify({ t: 'n', s: [npcState(0, 2)] }));
+  w.tick();
+  assert.equal(b.s.last('snap').s.find((e) => e[S.id] < 0)[S.pos], 2);
+});
+
+test('shared race results: players and opponents together, unfinished by distance', (t) => {
+  const w = new World();
+  t.after(() => w.stop());
+  const a = join(w, 'Ann');
+  const b = join(w, 'Bob');
+  w.message(a.c, JSON.stringify({ t: 'rcreate', ev: 'festival', npcs: roster(4) }));
+  w.message(b.c, JSON.stringify({ t: 'rjoin', id: w.race.id }));
+  w.message(a.c, JSON.stringify({ t: 'rgo' }));
+  w.race.startAt = Date.now() - 100000; // 100 s into the race
+  // opponent 0 finished first; 1 is projected to finish at 90 s (but it's 100 s already); 2 has no estimate
+  w.message(a.c, JSON.stringify({ t: 'rnpc', s: [[0, 3000, 0, 1, 70, null], [1, 2900, 0, 0, 0, 90], [2, 1200, 0, 0, 0, null]] }));
+  w.message(b.c, JSON.stringify({ t: 'rprog', d: 3000, done: true, time: 75 }));
+  w.message(a.c, JSON.stringify({ t: 'rprog', d: 2500, done: false }));
+  w.message(a.c, JSON.stringify({ t: 'rprog', d: 3000, done: true, time: 99 }));
+  w.tick();
+  const res = b.s.last('rend').results;
+  assert.deepEqual(
+    res.map((r) => r.name),
+    ['AI 0', 'Bob', 'Ann', 'AI 1', 'AI 2']
+  );
+  assert.ok(res[3].projected && res[3].time >= 100, 'a projection is never earlier than now');
+  assert.equal(res[4].time, null);
+  assert.equal(res[0].npc, true);
+  assert.equal(w.race, null);
+});
+
 test('world numbers are clamped', () => {
   assert.equal(worldNumber(null), 1);
   assert.equal(worldNumber('7'), 7);
