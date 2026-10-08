@@ -90,16 +90,18 @@ function allowedOrigin(origin, url) {
 const FRAME_ANCESTORS = "frame-ancestors 'self' https://x.com https://*.x.com https://twitter.com https://*.twitter.com";
 const LINK_META = new Set(['og:url', 'og:image', 'twitter:image', 'twitter:player']);
 
-// index.html keeps its link-preview URLs relative; X and others need them absolute.
+// index.html keeps its link-preview URLs relative (Vite also rewrites some to "./"); X and
+// others need them absolute.
 async function page(request, env, url) {
   const res = await env.ASSETS.fetch(request);
   if (!res.headers.get('Content-Type')?.includes('text/html')) return res;
+  const root = `${url.origin}/`;
   const out = new HTMLRewriter()
     .on('meta', {
       element(el) {
         const key = el.getAttribute('property') || el.getAttribute('name');
         const content = el.getAttribute('content');
-        if (LINK_META.has(key) && content?.startsWith('/')) el.setAttribute('content', url.origin + content);
+        if (LINK_META.has(key) && content && !/^[a-z][a-z0-9+.-]*:/i.test(content)) el.setAttribute('content', new URL(content, root).href);
       },
     })
     .transform(res);
