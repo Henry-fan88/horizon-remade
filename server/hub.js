@@ -1,17 +1,20 @@
 // One shared multiplayer world for Horizon Remade.
 // - Everyone who opens the game joins world 1. A full world answers "full" with the next
 //   world's number and the client hops there, so worlds only split once one fills up.
-// - Clients send their car state ~10 Hz; the world broadcasts the fresh states at TICK_HZ,
-//   each stamped with its age so remote cars interpolate on the sender's timeline.
+// - Clients send their car state when it changes (up to sendRateFor(players) Hz, stamped
+//   with when it was true in server time); the world relays the fresh states at TICK_HZ,
+//   each with its age, and the game predicts every car forward to "now" (src/net/sync.js).
 // - Chat, emotes and online race lobbies ("Horizon Open") are relayed per world.
 // Transport-agnostic: the Node server (multiplayer.js) and the Cloudflare Durable Object
 // (worker/index.js) both hand it sockets that only need send(text) and close(code, reason).
+import { PROTOCOL, S, STATE_LEN, sendRateFor } from './protocol.js';
 
-export const PROTOCOL = 2;
-// A Durable Object handles roughly 1,000 messages/s; 80 players at 10 Hz stays under that.
+export { PROTOCOL };
+// A Durable Object handles roughly 1,000 messages/s; sendRateFor keeps a full world under that.
 export const WORLD_CAP = 80;
 export const MAX_WORLDS = 32;
-const TICK_HZ = 15;
+const TICK_HZ = 30;
+const MAX_STATE_AGE = 2000; // ms: a state claiming to be older is treated as arriving now
 // Drop sockets that went silent (dead network). Hidden tabs still ping every 20-60 s.
 const IDLE_MS = 120000;
 const MAX_MESSAGE = 16 * 1024;
@@ -71,6 +74,15 @@ export class World {
     this.nextRace = 1;
     this.timer = null;
     this.reaper = null;
+    this.hz = sendRateFor(0); // how fast cars may send; lowered as the world fills
+  }
+
+  // tell everyone when the world's population changes the send rate
+  retune() {
+    const hz = sendRateFor(this.clients.size);
+    if (hz === this.hz) return;
+    this.hz = hz;
+    this.broadcast({ t: 'rate', hz });
   }
 
   get size() {
@@ -110,7 +122,7 @@ export class World {
       joined: false,
       gone: false,
       lastSeen: t,
-      budget: 60,
+      budget: 90,
       chatBudget: 5,
       lastBudget: t,
       race: null,
@@ -138,6 +150,7 @@ export class World {
       this.raceLeave(client);
       this.clients.delete(client);
       this.broadcast({ t: 'leave', id: client.id });
+      this.retune();
       if (this.log) console.log(`[mp] ${client.name} left world ${this.id} (${this.clients.size} players)`);
     }
     if (this.sockets.size === 0) {
@@ -170,10 +183,10 @@ export class World {
     if (client.gone) return;
     const t = now();
     client.lastSeen = t;
-    // simple token bucket rate limiting
+    // simple token bucket rate limiting (states up to 30 Hz, pings 1 Hz, the odd chat)
     const elapsed = (t - client.lastBudget) / 1000;
     client.lastBudget = t;
-    client.budget = Math.min(60, client.budget + elapsed * 40);
+    client.budget = Math.min(90, client.budget + elapsed * 45);
     client.chatBudget = Math.min(5, client.chatBudget + elapsed * 0.5);
     if (client.budget < 1) return;
     client.budget -= 1;
@@ -246,7 +259,8 @@ export class World {
     const players = [...this.clients].map((c) => ({ id: c.id, name: c.name, car: c.car, paint: c.paint }));
     client.joined = true;
     this.clients.add(client);
-    this.sendTo(client, { t: 'welcome', id: client.id, world: this.id, cap: this.cap, players, now: now(), protocol: PROTOCOL, settings: this.settings, race: this.race ? this.raceInfo(this.race) : null });
+    this.retune();
+    this.sendTo(client, { t: 'welcome', id: client.id, world: this.id, cap: this.cap, hz: this.hz, players, now: now(), protocol: PROTOCOL, settings: this.settings, race: this.race ? this.raceInfo(this.race) : null });
     this.broadcast({ t: 'join', p: { id: client.id, name: client.name, car: client.car, paint: client.paint } }, client);
     if (this.log) console.log(`[mp] ${client.name} joined world ${this.id} (${this.clients.size} players)`);
   }
@@ -263,45 +277,50 @@ export class World {
     if (this.log) console.log(`[mp] ${client.name} changed world ${this.id}: ${JSON.stringify(next)}`);
   }
 
+  // A car state (layout: protocol.js S). `ts` is when it was true, in server time by the
+  // sender's clock; trusted within MAX_STATE_AGE of arriving, never later than arrival, and
+  // always after the previous state, so other players can predict from the right moment.
   onState(client, m) {
     if (!Array.isArray(m.p) || !Array.isArray(m.q)) return;
+    const t = now();
+    const arr = (a, n) => (Array.isArray(a) && a.length === n ? a : null);
     const p = m.p,
       q = m.q,
-      v = Array.isArray(m.v) ? m.v : [0, 0, 0];
+      v = arr(m.v, 3) || [0, 0, 0],
+      av = arr(m.av, 3) || [0, 0, 0],
+      ac = arr(m.ac, 2) || [0, 0],
+      w = arr(m.w, 4) || [-1, -1, -1, -1];
     const r2 = (x) => Math.round(x * 100) / 100;
     const r3 = (x) => Math.round(x * 1000) / 1000;
-    client.state = [
-      client.id,
-      r2(clampNum(p[0], -5000, 5000)),
-      r2(clampNum(p[1], -200, 2000)),
-      r2(clampNum(p[2], -5000, 5000)),
-      r3(clampNum(q[0], -1, 1)),
-      r3(clampNum(q[1], -1, 1)),
-      r3(clampNum(q[2], -1, 1)),
-      r3(clampNum(q[3], -1, 1, 1)),
-      r2(clampNum(v[0], -200, 200)),
-      r2(clampNum(v[1], -200, 200)),
-      r2(clampNum(v[2], -200, 200)),
-      r2(clampNum(m.st, -1, 1)),
-      clampNum(m.f, 0, 255) | 0,
-      Math.round(clampNum(m.rpm, 0, 12000)),
-      clampNum(m.g, -1, 9) | 0,
-      // one code per wheel for tyre smoke and tracks: -1 airborne, else surface*1000 + spin*100 + slip
-      Array.isArray(m.w) && m.w.length === 4 ? m.w.map((x) => clampNum(x, -1, 99999, -1) | 0) : [-1, -1, -1, -1],
-    ];
-    client.stateT = now();
+    const s = client.state || (client.state = new Array(STATE_LEN).fill(0));
+    s[S.id] = client.id;
+    s[S.pos] = r2(clampNum(p[0], -5000, 5000));
+    s[S.pos + 1] = r2(clampNum(p[1], -200, 2000));
+    s[S.pos + 2] = r2(clampNum(p[2], -5000, 5000));
+    for (let i = 0; i < 4; i++) s[S.quat + i] = r3(clampNum(q[i], -1, 1, i === 3 ? 1 : 0));
+    for (let i = 0; i < 3; i++) s[S.vel + i] = r2(clampNum(v[i], -200, 200));
+    for (let i = 0; i < 3; i++) s[S.angVel + i] = r3(clampNum(av[i], -20, 20));
+    for (let i = 0; i < 2; i++) s[S.acc + i] = r2(clampNum(ac[i], -40, 40));
+    s[S.steer] = r2(clampNum(m.st, -1, 1));
+    s[S.flags] = clampNum(m.f, 0, 255) | 0;
+    s[S.rpm] = Math.round(clampNum(m.rpm, 0, 12000));
+    s[S.gear] = clampNum(m.g, -1, 9) | 0;
+    for (let i = 0; i < 4; i++) s[S.wheels + i] = clampNum(w[i], -1, 99999, -1) | 0;
+    const ts = typeof m.ts === 'number' && isFinite(m.ts) ? Math.min(t, Math.max(t - MAX_STATE_AGE, m.ts)) : t;
+    client.stateT = Math.max(ts, client.stateT + 1);
     client.fresh = true;
   }
 
   // Each snapshot carries only states that arrived since the last tick, each with its age
-  // in ms (last element), so a repeated or late sample never moves a car backwards.
+  // (S.age), so a repeated or late state never moves a car backwards.
   tick() {
     const t = now();
     const states = [];
     for (const c of this.clients)
       if (c.fresh) {
         c.fresh = false;
-        states.push([...c.state, t - c.stateT]);
+        c.state[S.age] = t - c.stateT;
+        states.push(c.state);
       }
     if (states.length) this.broadcast({ t: 'snap', now: t, s: states });
     if (this.race) this.raceTick(t);

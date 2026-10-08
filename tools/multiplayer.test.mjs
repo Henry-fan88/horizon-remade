@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import { World, CLOSE, MAX_WORLDS, worldNumber } from '../server/hub.js';
 import { attachMultiplayer } from '../server/multiplayer.js';
+import { S, sendRateFor } from '../server/protocol.js';
 import { worldHour } from '../src/world/sky.js';
 
 // A socket double that records what the world sends it.
@@ -47,10 +48,10 @@ test('players in one world see each other join, move and leave', (t) => {
   w.tick();
   const snap = b.s.last('snap');
   assert.equal(snap.s.length, 1);
-  assert.equal(snap.s[0][0], a.c.id);
-  assert.equal(snap.s[0][1], 10);
-  assert.deepEqual(snap.s[0][15], [8012, -1, 8960, 8999], 'wheel codes for tyre smoke');
-  assert.ok(snap.s[0][16] >= 0 && snap.s[0][16] < 1000, 'last element is the state age in ms');
+  assert.equal(snap.s[0][S.id], a.c.id);
+  assert.equal(snap.s[0][S.pos], 10);
+  assert.deepEqual(snap.s[0].slice(S.wheels, S.wheels + 4), [8012, -1, 8960, 8999], 'wheel codes for tyre smoke');
+  assert.ok(snap.s[0][S.age] >= 0 && snap.s[0][S.age] < 1000, 'the state age in ms');
   // a state is only broadcast once: a silent player is not re-sent with a newer timestamp
   b.s.sent.length = 0;
   w.tick();
@@ -181,10 +182,10 @@ test('wheel codes are sanitised; a state without them reads as airborne', (t) =>
   const b = join(w, 'B');
   w.message(a.c, state(1));
   w.tick();
-  assert.deepEqual(b.s.last('snap').s[0][15], [-1, -1, -1, -1]);
+  assert.deepEqual(b.s.last('snap').s[0].slice(S.wheels, S.wheels + 4), [-1, -1, -1, -1]);
   w.message(a.c, state(2, [1e9, 'x', -50, 3.7]));
   w.tick();
-  assert.deepEqual(b.s.last('snap').s[0][15], [99999, -1, -1, 3]);
+  assert.deepEqual(b.s.last('snap').s[0].slice(S.wheels, S.wheels + 4), [99999, -1, -1, 3]);
 });
 
 test('world settings: anyone can change them, everyone gets them, joiners too', (t) => {
@@ -234,6 +235,55 @@ test('Node server keeps a world\'s settings after it empties', async (t) => {
   await new Promise((r) => setTimeout(r, 100));
   const later = await session(() => {});
   assert.equal(later.settings.timeOfDay, 'golden');
+});
+
+test('states carry when they were true: trusted within limits, always moving forward', (t) => {
+  const w = new World();
+  t.after(() => w.stop());
+  const a = join(w, 'A');
+  const b = join(w, 'B');
+  const send = (ts) => w.message(a.c, JSON.stringify({ t: 's', ts, p: [1, 2, 3], q: [0, 0, 0, 1], v: [1, 0, 0], av: [0, 0.5, 0], ac: [2, -1] }));
+  const sent = () => {
+    w.tick();
+    const snap = b.s.last('snap');
+    return { when: snap.now - snap.s[0][S.age], e: snap.s[0] };
+  };
+  const t0 = Date.now();
+  send(t0 - 300);
+  let r = sent();
+  assert.ok(Math.abs(r.when - (t0 - 300)) <= 1, 'the sender stamped it 300 ms ago');
+  assert.deepEqual(r.e.slice(S.angVel, S.angVel + 3), [0, 0.5, 0]);
+  assert.deepEqual(r.e.slice(S.acc, S.acc + 2), [2, -1]);
+  send(Date.now() + 5000);
+  r = sent();
+  assert.ok(r.when <= Date.now(), 'never later than it arrived');
+  send(Date.now() - 60000);
+  r = sent();
+  assert.ok(r.when > Date.now() - 2100, 'at most 2 s old');
+  const before = r.when;
+  send(before - 500);
+  r = sent();
+  assert.ok(r.when > before, 'never earlier than the previous state');
+  send(undefined);
+  assert.ok(Math.abs(sent().when - Date.now()) < 50, 'no stamp: its arrival');
+});
+
+test('cars may send faster in a small world, slower as it fills', (t) => {
+  assert.equal(sendRateFor(1), 30);
+  assert.equal(sendRateFor(30), 30);
+  assert.equal(sendRateFor(45), 20);
+  assert.equal(sendRateFor(80), 11);
+  assert.equal(sendRateFor(500), 10);
+  const w = new World({ cap: 100 });
+  t.after(() => w.stop());
+  const first = join(w, 'P0');
+  assert.equal(first.s.last('welcome').hz, 30);
+  for (let i = 1; i < 31; i++) join(w, 'P' + i);
+  assert.equal(first.s.last('rate').hz, 29, 'everyone hears the new rate');
+  const late = join(w, 'Late');
+  assert.equal(late.s.last('welcome').hz, 28);
+  w.disconnect(late.c);
+  assert.equal(first.s.last('rate').hz, 29);
 });
 
 test('world numbers are clamped', () => {

@@ -376,6 +376,71 @@ export class CollisionWorld {
     }
     return impact;
   }
+
+  // How far a car of radius `rad` at height `y` can move along (x0, z0) -> (x1, z1) before
+  // touching static geometry, as a fraction 0..1 (1 = clear). Shapes it already touches at
+  // the start are ignored, so a car sliding along a wall keeps sliding. (Other players'
+  // predicted paths stop at walls instead of running through them; see net.js.)
+  sweep(x0, z0, x1, z1, rad, y) {
+    const dx = x1 - x0,
+      dz = z1 - z0;
+    const len = Math.hypot(dx, dz);
+    if (len < 1e-3) return 1;
+    const cand = this.query(this.grid, this.statics, x0 + dx / 2, z0 + dz / 2, len / 2 + rad, (this._sweep ||= []));
+    let best = 1;
+    for (const i of cand) {
+      const s = this.statics[i];
+      if (y < s.y0 - 0.5 || y > s.y1 + 0.5) continue;
+      const t = s.type === 0 ? enterCircle(x0 - s.x, z0 - s.z, dx, dz, s.r + rad) : enterBox(x0 - s.x, z0 - s.z, dx, dz, s, rad);
+      if (t < best) best = t;
+    }
+    return best;
+  }
+}
+
+// First t in [0, 1] at which the point (px, pz) + t (dx, dz) enters a circle of radius R
+// around the origin; Infinity if it never does or starts inside.
+function enterCircle(px, pz, dx, dz, R) {
+  const c = px * px + pz * pz - R * R;
+  if (c <= 0) return Infinity;
+  const a = dx * dx + dz * dz,
+    b = 2 * (px * dx + pz * dz);
+  const disc = b * b - 4 * a * c;
+  if (disc < 0 || b >= 0) return Infinity;
+  const t = (-b - Math.sqrt(disc)) / (2 * a);
+  return t <= 1 ? t : Infinity;
+}
+
+// ... the same for a static prism grown by R, in its own frame (u along hx, v along hz)
+function enterBox(px, pz, dx, dz, st, R) {
+  const c = st.c,
+    s = st.s;
+  const u = px * c + pz * s,
+    v = -px * s + pz * c;
+  const du = dx * c + dz * s,
+    dv = -dx * s + dz * c;
+  const hu = st.hx + R,
+    hv = st.hz + R;
+  if (Math.abs(u) <= hu && Math.abs(v) <= hv) return Infinity;
+  let t0 = 0,
+    t1 = 1;
+  if (Math.abs(du) < 1e-9) {
+    if (Math.abs(u) > hu) return Infinity;
+  } else {
+    const a = (-hu - u) / du,
+      b = (hu - u) / du;
+    t0 = Math.max(t0, Math.min(a, b));
+    t1 = Math.min(t1, Math.max(a, b));
+  }
+  if (Math.abs(dv) < 1e-9) {
+    if (Math.abs(v) > hv) return Infinity;
+  } else {
+    const a = (-hv - v) / dv,
+      b = (hv - v) / dv;
+    t0 = Math.max(t0, Math.min(a, b));
+    t1 = Math.min(t1, Math.max(a, b));
+  }
+  return t0 <= t1 ? t0 : Infinity;
 }
 
 // Kept for callers that want the old footprint description.

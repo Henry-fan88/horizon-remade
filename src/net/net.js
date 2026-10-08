@@ -1,16 +1,21 @@
-// Multiplayer client: joins the shared world, state sync + interpolation, nametags, chat,
-// online races. The nearest players are drawn with their real car, farther ones as one
-// instanced stand-in, and the farthest only as map dots, so a full world stays cheap.
+// Multiplayer client: joins the shared world, state sync, nametags, chat, online races.
+// Other cars are drawn where they are now: each state carries when it was true, and
+// src/net/sync.js predicts forward from it and blends corrections in. The nearest players
+// are drawn with their real car, farther ones as one instanced stand-in, and the farthest
+// only as map dots, so a full world stays cheap.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildCar } from '../vehicle/carmodel.js';
 import { CAR_BY_ID } from '../vehicle/carspecs.js';
 import { escapeHtml } from '../game/race.js';
 import { resolveVehiclePair } from '../world/colliders.js';
+import { PROTOCOL, S } from '../../server/protocol.js';
+import { ServerClock, SendGate, RemoteMotion, makeState, localNow } from './sync.js';
 
 const BUILD = typeof __BUILD_ID__ !== 'undefined' ? __BUILD_ID__ : 'dev';
-const SEND_HZ = 10;
-const INTERP_DELAY = 200; // ms: two 10 Hz updates plus network jitter
+const PING_MS = 1000; // clock sync; a burst right after joining settles it quickly
+const PING_BURST = [60, 180, 320, 500];
+const STALE_MS = 5000; // a player silent this long is hidden
 const FULL_MODELS = 10; // nearest other players drawn with their real car
 const FULL_DIST = 320; // m
 const DRAW_DIST = 2500; // beyond this other players are map dots only
@@ -19,6 +24,7 @@ const MAX_PROXIES = 128;
 const KEEPALIVE_MS = 20000; // also runs in hidden tabs, where the frame loop stops
 const HIDDEN_LEAVE_MS = 10 * 60 * 1000; // a tab left in the background gives its slot back
 const FX_DIST = 180; // m: other players' tyre smoke, skid marks and sand/snow tracks
+const WALL_DIST = 400; // m: nearer players' predicted paths stop at walls (collision sweep)
 const AIRBORNE = [-1, -1, -1, -1];
 const WORLD_LABELS = {
   timeOfDay: { dynamic: 'dynamic day/night', morning: 'morning', noon: 'midday', golden: 'golden hour', sunset: 'sunset', night: 'night' },
@@ -28,10 +34,13 @@ const WORLD_LABELS = {
 // One number per wheel for other players' tyre effects: -1 airborne, else
 // surface * 1000 + spin (0-9) * 100 + slip (0-99, slip / 0.02).
 const wheelCode = (w) => (w.contact ? (w.surface | 0) * 1000 + Math.round(Math.min(1, w.spinning || 0) * 9) * 100 + Math.round(Math.min(1.98, w.slip || 0) * 50) : -1);
+// what of a wheel changes the look of tyre effects: airborne, surface, smoking (slip > 0.45)
+const wheelLook = (c) => (c < 0 ? 'a' : `${Math.floor(c / 1000)}${c % 100 > 22 ? 's' : ''}`);
+const r2 = (x) => Math.round(x * 100) / 100;
+const r3 = (x) => Math.round(x * 1000) / 1000;
 
 const _v = new THREE.Vector3();
 const _q = new THREE.Quaternion();
-const _q2 = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
 const _one = new THREE.Vector3(1, 1, 1);
 
@@ -85,11 +94,15 @@ export class NetClient {
     this.world = 1;
     this.lastWorld = 0;
     this.players = new Map();
-    this.offset = 0;
-    this.rtt = 0;
+    this.clock = new ServerClock();
+    this.gate = new SendGate();
+    this.maxHz = 30; // the world lowers it as it fills
+    this.acc = new THREE.Vector3(); // this car's smoothed horizontal acceleration
+    this.prevVel = null;
+    this.helloAt = 0;
+    this.pinger = null;
+    this.burst = [];
     this.chatLog = [];
-    this.sendTimer = 0;
-    this.pingTimer = 0;
     this.retry = 0;
     this.retryTimer = null;
     this.dropTimer = null;
@@ -123,6 +136,14 @@ export class NetClient {
         this.connect();
       }
     });
+  }
+
+  get offset() {
+    return this.clock.offset;
+  }
+
+  get rtt() {
+    return this.clock.rtt;
   }
 
   url() {
@@ -163,7 +184,8 @@ export class NetClient {
     ws.onopen = () => {
       const g = this.game;
       const cur = g.save.currentCar;
-      this.send({ t: 'hello', name: g.save.data.name || 'Driver', car: cur.id, paint: cur.paint.color, b: BUILD, v: 2 });
+      this.helloAt = localNow(); // hello -> welcome is the first clock sample
+      this.send({ t: 'hello', name: g.save.data.name || 'Driver', car: cur.id, paint: cur.paint.color, b: BUILD, v: PROTOCOL });
     };
     ws.onmessage = (e) => {
       let m;
@@ -182,6 +204,7 @@ export class NetClient {
     if (this.ws !== ws) return;
     this.ws = null;
     const was = this.state;
+    this.stopPinging();
     this.cleanupPlayers();
     // the world was full: go straight on to the next one
     if (this.hop) {
@@ -226,8 +249,28 @@ export class NetClient {
     this.ws = null;
     if (ws) ws.close();
     this.state = 'offline';
+    this.stopPinging();
     this.cleanupPlayers();
     this.leaveWorldSettings();
+  }
+
+  // Pings keep the clock estimate fresh (and hidden tabs alive); they run on timers, not
+  // frames. A burst right after joining finds a fast round trip within half a second.
+  startPinging() {
+    this.stopPinging();
+    this.pinger = setInterval(() => this.ping(), PING_MS);
+    this.burst = PING_BURST.map((ms) => setTimeout(() => this.ping(), ms));
+  }
+
+  stopPinging() {
+    clearInterval(this.pinger);
+    this.pinger = null;
+    for (const t of this.burst) clearTimeout(t);
+    this.burst = [];
+  }
+
+  ping() {
+    if (this.state === 'connected') this.send({ t: 'ping', c: localNow() });
   }
 
   // offline the player's own time of day and day length apply again
@@ -241,16 +284,14 @@ export class NetClient {
     this.send({ t: 'world', ...change });
   }
 
-  // Runs on a timer rather than per frame, so a hidden tab keeps its place in the world
-  // for a while (the server drops silent sockets), then leaves until it is shown again.
+  // A hidden tab keeps its place in the world for a while (its pings keep the socket
+  // alive), then leaves until it is shown again.
   keepAlive() {
     if (this.state !== 'connected') return;
     if (this.hiddenSince && Date.now() - this.hiddenSince > HIDDEN_LEAVE_MS) {
       this.disconnect();
       this.paused = true;
-      return;
     }
-    if (document.hidden) this.send({ t: 'ping', c: Date.now() });
   }
 
   send(obj) {
@@ -258,7 +299,7 @@ export class NetClient {
   }
 
   serverNow() {
-    return Date.now() + this.offset;
+    return this.clock.now();
   }
 
   cleanupPlayers() {
@@ -280,7 +321,11 @@ export class NetClient {
         this.world = m.world;
         this.retry = 0;
         clearTimeout(this.dropTimer);
-        this.offset = m.now - Date.now();
+        this.clock.reset();
+        this.clock.sample(this.helloAt, m.now);
+        this.startPinging();
+        this.maxHz = m.hz || 30;
+        this.gate = new SendGate(); // the first state goes out at once
         this.worldSettings = m.settings || null;
         g.applyWorld();
         for (const p of m.players) this.addPlayer(p);
@@ -303,6 +348,9 @@ export class NetClient {
         break;
       case 'wait':
         this.waiting = true;
+        break;
+      case 'rate':
+        this.maxHz = m.hz || this.maxHz;
         break;
       case 'world': {
         const before = this.worldSettings || {};
@@ -330,26 +378,30 @@ export class NetClient {
         break;
       }
       case 'snap':
-        for (const s of m.s) {
-          if (s[0] === this.id) continue;
-          const p = this.players.get(s[0]);
+        for (const e of m.s) {
+          if (e[S.id] === this.id) continue;
+          const p = this.players.get(e[S.id]);
           if (!p) continue;
-          // s[16] is how long the state waited on the server, so samples keep the sender's spacing
-          const t = m.now - (s[16] || 0);
-          const b = p.buf;
-          if (b.length && t <= b[b.length - 1].t) continue;
-          b.push({ t, p: [s[1], s[2], s[3]], q: [s[4], s[5], s[6], s[7]], v: [s[8], s[9], s[10]], st: s[11], f: s[12], rpm: s[13], g: s[14], w: s[15] || AIRBORNE });
-          if (b.length > 30) b.shift();
+          // when the state was true, in server time (the sender's own stamp)
+          const ts = m.now - e[S.age];
+          if (ts <= p.motion.ts) continue;
+          const s = makeState();
+          s.ts = ts;
+          s.pos.set(e[S.pos], e[S.pos + 1], e[S.pos + 2]);
+          s.quat.set(e[S.quat], e[S.quat + 1], e[S.quat + 2], e[S.quat + 3]).normalize();
+          s.vel.set(e[S.vel], e[S.vel + 1], e[S.vel + 2]);
+          s.angVel.set(e[S.angVel], e[S.angVel + 1], e[S.angVel + 2]);
+          s.acc.set(e[S.acc], 0, e[S.acc + 1]);
+          p.motion.push(s);
+          p.st = e[S.steer];
+          p.f = e[S.flags];
+          p.rpm = e[S.rpm];
+          p.w = e.slice(S.wheels, S.wheels + 4);
         }
         break;
-      case 'pong': {
-        const now = Date.now();
-        const rtt = now - m.c;
-        this.rtt = this.rtt ? this.rtt * 0.8 + rtt * 0.2 : rtt;
-        const off = m.now + rtt / 2 - now;
-        this.offset = this.offset * 0.8 + off * 0.2;
+      case 'pong':
+        this.clock.sample(m.c, m.now);
         break;
-      }
       case 'chat':
         this.chatLog.push({ name: m.name, m: m.m });
         if (this.chatLog.length > 100) this.chatLog.shift();
@@ -409,15 +461,17 @@ export class NetClient {
   // ------------------------------------------------------------ players
   addPlayer(info) {
     if (info.id === this.id || this.players.has(info.id)) return;
+    const motion = new RemoteMotion();
     const p = {
       id: info.id,
       name: info.name,
       car: info.car,
       paint: info.paint,
-      buf: [],
-      pos: new THREE.Vector3(),
-      quat: new THREE.Quaternion(),
-      vel: new THREE.Vector3(),
+      motion,
+      // the pose drawn (models, stand-ins, tags, effects and collisions all read these)
+      pos: motion.pos,
+      quat: motion.quat,
+      vel: motion.vel,
       color: new THREE.Color(),
       proxyLocal: new THREE.Matrix4(),
       st: 0,
@@ -446,6 +500,9 @@ export class NetClient {
     p.spec = spec;
     p.color.set(p.paint);
     p.body = new RemoteBody(spec);
+    // how much of a predicted path is clear of walls, for a car this wide
+    const rad = st.W / 2;
+    p.limit = (from, to) => this.game.collision?.sweep(from.x, from.z, to.x, to.z, rad, from.y) ?? 1;
     // the shape effects.js expects of a vehicle; the id keys skid marks (id * 4 + wheel)
     if (p.fxOn) this.liftEffects(p);
     p.fx = {
@@ -525,24 +582,56 @@ export class NetClient {
   }
 
   // ------------------------------------------------------------ per frame
+  // this car's state, sent when others' prediction of it would drift (SendGate)
+  sendState(dt) {
+    const g = this.game;
+    const ph = g.player.physics;
+    // smoothed horizontal acceleration: lets others predict launches and braking
+    if (this.prevVel && dt > 0) {
+      const k = 1 - Math.exp(-dt / 0.08);
+      this.acc.x += (THREE.MathUtils.clamp((ph.vel.x - this.prevVel.x) / dt, -30, 30) - this.acc.x) * k;
+      this.acc.z += (THREE.MathUtils.clamp((ph.vel.z - this.prevVel.z) / dt, -30, 30) - this.acc.z) * k;
+    }
+    (this.prevVel ||= new THREE.Vector3()).copy(ph.vel);
+    const f = (ph.input.brake > 0.1 ? 1 : 0) | (g.env.lightsOn ? 2 : 0) | (ph.gear < 0 ? 4 : 0) | (g.race.running ? 8 : 0);
+    const w = ph.wheels.map(wheelCode);
+    const st = (this._st ||= { acc: this.acc });
+    st.pos = ph.pos;
+    st.quat = ph.quat;
+    st.vel = ph.vel;
+    st.angVel = ph.angVel;
+    st.steer = ph.steerAngle;
+    st.key = `${ph.gear}|${f}|${w.map(wheelLook).join('')}`;
+    const now = localNow();
+    if (!this.gate.due(now, st, this.maxHz)) return;
+    this.send({
+      t: 's',
+      ts: Math.round(this.clock.now(now)),
+      p: [r2(ph.pos.x), r2(ph.pos.y), r2(ph.pos.z)],
+      q: [r3(ph.quat.x), r3(ph.quat.y), r3(ph.quat.z), r3(ph.quat.w)],
+      v: [r2(ph.vel.x), r2(ph.vel.y), r2(ph.vel.z)],
+      av: [r3(ph.angVel.x), r3(ph.angVel.y), r3(ph.angVel.z)],
+      ac: [r2(this.acc.x), r2(this.acc.z)],
+      st: r2(ph.steerAngle),
+      f,
+      rpm: Math.round(ph.rpm),
+      g: ph.gear,
+      w,
+    });
+    this.gate.sent(now, st);
+  }
+
   update(dt) {
     if (this.state !== 'connected') return;
     const g = this.game;
-    // send state
-    this.sendTimer += dt;
-    if (this.sendTimer >= 1 / SEND_HZ) {
-      this.sendTimer = 0;
-      const ph = g.player.physics;
-      const f = (ph.input.brake > 0.1 ? 1 : 0) | (g.env.lightsOn ? 2 : 0) | (ph.gear < 0 ? 4 : 0) | (g.race.running ? 8 : 0);
-      this.send({ t: 's', p: [ph.pos.x, ph.pos.y, ph.pos.z], q: [ph.quat.x, ph.quat.y, ph.quat.z, ph.quat.w], v: [ph.vel.x, ph.vel.y, ph.vel.z], st: ph.steerAngle, f, rpm: ph.rpm, g: ph.gear, w: ph.wheels.map(wheelCode) });
-    }
-    this.pingTimer -= dt;
-    if (this.pingTimer <= 0) {
-      this.pingTimer = 2;
-      this.send({ t: 'ping', c: Date.now() });
-    }
+    this.sendState(dt);
     const cam = g.camera;
-    this.interpolate();
+    // every other car where it is now (predicted from its newest state)
+    const now = this.serverNow();
+    for (const p of this.players.values()) {
+      if (!p.motion.update(now, dt, p.dist < WALL_DIST ? p.limit : null)) continue;
+      p.visible = now - p.motion.ts <= STALE_MS;
+    }
     // level of detail: the nearest few get their real car (current ones keep it with some
     // margin so cars don't flicker at the edge), one new model per frame at most
     const ranked = this._ranked;
@@ -633,42 +722,6 @@ export class NetClient {
         this.progTimer = 0.4;
         this.raceProgress(g.race, false);
       }
-    }
-  }
-
-  // every remote car's pose at (server time - INTERP_DELAY), extrapolated briefly past the
-  // newest sample; players silent for 5 s are hidden
-  interpolate() {
-    const renderT = this.serverNow() - INTERP_DELAY;
-    for (const p of this.players.values()) {
-      const b = p.buf;
-      if (!b.length) continue;
-      let a = null,
-        c = null;
-      for (let i = b.length - 1; i >= 0; i--)
-        if (b[i].t <= renderT) {
-          a = b[i];
-          c = b[i + 1] || null;
-          break;
-        }
-      if (!a) a = b[0];
-      if (c) {
-        const k = Math.min(1, (renderT - a.t) / Math.max(1, c.t - a.t));
-        p.pos.set(a.p[0] + (c.p[0] - a.p[0]) * k, a.p[1] + (c.p[1] - a.p[1]) * k, a.p[2] + (c.p[2] - a.p[2]) * k);
-        _q.set(a.q[0], a.q[1], a.q[2], a.q[3]);
-        _q2.set(c.q[0], c.q[1], c.q[2], c.q[3]);
-        p.quat.slerpQuaternions(_q, _q2, k);
-      } else {
-        const ex = Math.min(0.35, Math.max(0, (renderT - a.t) / 1000));
-        p.pos.set(a.p[0] + a.v[0] * ex, a.p[1] + a.v[1] * ex, a.p[2] + a.v[2] * ex);
-        p.quat.set(a.q[0], a.q[1], a.q[2], a.q[3]);
-      }
-      p.vel.set(a.v[0], a.v[1], a.v[2]);
-      p.w = a.w;
-      p.st = a.st || 0;
-      p.f = a.f;
-      p.rpm = a.rpm;
-      p.visible = this.serverNow() - b[b.length - 1].t <= 5000;
     }
   }
 
@@ -790,7 +843,6 @@ export class NetClient {
       this.lobby = { ...this.lobby, state: 'running' };
       return;
     }
-    this.offset = this.offset * 0.5 + (m.now - Date.now()) * 0.5;
     const def = g.events.races.find((r) => r.id === m.ev);
     if (!def) return;
     this.lobby = { ...this.lobby, state: 'running' };

@@ -185,7 +185,11 @@ seconds without drag movement, the camera smoothly returns to its normal driving
 - **Progression:** credits, XP, levels, Wheelspins, an Autoshow and a garage, saved in
   localStorage.
 - **Online:** one shared world for everyone on the site (80 per world; extra worlds open when
-  one is full). Remote cars are interpolated and have nametags and engine sounds. The nearest
+  one is full). Other cars are drawn where they are now rather than where they were
+  (`src/net/sync.js`). Each state carries the moment it was true. Receivers predict forward
+  from its velocity, acceleration and turn rate, stop the prediction at walls, and blend
+  corrections in. Cars send when that prediction would drift (up to 30 Hz in a small world).
+  The clock sync trusts only the fastest pings. Remote cars have nametags and engine sounds. The nearest
   ten use their real model, farther ones a single instanced stand-in, and beyond 2.5 km they
   appear only on the map. Time of day follows the server clock, so everyone shares one sky.
   Also includes chat and **Horizon Open** online races: the host starts a lobby, others press J
