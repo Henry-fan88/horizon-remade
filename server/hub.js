@@ -8,6 +8,7 @@
 // Transport-agnostic: the Node server (multiplayer.js) and the Cloudflare Durable Object
 // (worker/index.js) both hand it sockets that only need send(text) and close(code, reason).
 import { PROTOCOL, S, STATE_LEN, sendRateFor } from './protocol.js';
+import { CLIMATE_OPTIONS, pushChange, cleanLog } from '../src/world/climate.js';
 
 export { PROTOCOL };
 // A Durable Object handles roughly 1,000 messages/s; sendRateFor keeps a full world under that.
@@ -65,13 +66,23 @@ export const CLOSE = { idle: 4000, update: 4001, full: 4002, wait: 4003 };
 export const WORLD_OPTIONS = {
   timeOfDay: ['dynamic', 'morning', 'noon', 'golden', 'sunset', 'night'],
   dayLength: [20, 40, 60, 120],
+  weather: CLIMATE_OPTIONS.weather,
+  season: CLIMATE_OPTIONS.season,
 };
-export const WORLD_DEFAULTS = { timeOfDay: 'dynamic', dayLength: 40 };
+export const WORLD_DEFAULTS = { timeOfDay: 'dynamic', dayLength: 40, weather: 'auto', season: 'auto' };
 const WORLD_CHANGE_MS = 2000; // per player, so nobody can strobe the sky
+// Weather and season changes fade in (src/world/climate.js). The world keeps a short log of
+// them in server time ("weatherLog", "seasonLog") so every player draws the same fade, and
+// the same wet roads and lying snow afterwards.
+const LOGGED = ['weather', 'season'];
 
 export function worldSettings(input) {
   const out = { ...WORLD_DEFAULTS };
   for (const [k, options] of Object.entries(WORLD_OPTIONS)) if (input && options.includes(input[k])) out[k] = input[k];
+  for (const k of LOGGED) {
+    const log = cleanLog(input?.[k + 'Log'], WORLD_OPTIONS[k]);
+    if (log && log[log.length - 1][0] === out[k]) out[k + 'Log'] = log;
+  }
   return out;
 }
 
@@ -314,6 +325,7 @@ export class World {
     const next = { ...this.settings };
     for (const [k, options] of Object.entries(WORLD_OPTIONS)) if (options.includes(msg[k])) next[k] = msg[k];
     if (Object.keys(WORLD_OPTIONS).every((k) => next[k] === this.settings[k])) return;
+    for (const k of LOGGED) if (next[k] !== this.settings[k]) next[k + 'Log'] = pushChange(this.settings[k + 'Log'] ?? [[this.settings[k], 0]], next[k], t);
     client.lastWorldChange = t;
     this.settings = next;
     this.broadcast({ t: 'world', settings: next, by: client.name, id: client.id });

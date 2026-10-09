@@ -1,6 +1,7 @@
 // Main game orchestrator: renderer, world, player, systems, state machine and loop.
 import * as THREE from 'three';
 import { installAtmosphere, Environment } from '../world/sky.js';
+import { installWeatherSurfaces } from '../world/weather-surface.js';
 import { World, generateInWorker } from '../world/world.js';
 import { PostFX } from '../render/postfx.js';
 import { setMaxAnisotropy } from '../world/textures.js';
@@ -29,6 +30,7 @@ import { CityLife } from './citylife.js';
 import { RoadGraph, distToPolyline } from './gps.js';
 import { Save, Progression } from './progression.js';
 import { Rewind } from './rewind.js';
+import { WeatherSystem } from './weather.js';
 import { HUD } from '../ui/hud.js';
 import { renderMapImages } from '../ui/mapimage.js';
 import { Menus } from '../ui/menus.js';
@@ -85,6 +87,7 @@ export class Game {
 
   async start(onProgress) {
     installAtmosphere();
+    installWeatherSurfaces();
     installShadowChunks();
     const canvas = document.getElementById('game-canvas');
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', reversedDepthBuffer: true, stencil: false });
@@ -182,6 +185,9 @@ export class Game {
     this.net = new NetClient(this);
     // dynamic time of day follows the server clock, so the whole world shares one sky
     this.env.clock = () => this.net.serverNow();
+    // and so do the weather and the season
+    this.weather = new WeatherSystem(this);
+    this.weather.setQuality(this.qualityName());
     this.probe = new ReflectionProbe(128);
     this.onStuntFinished = (st, value, stars) => {
       this.progression.addXP(250 + stars * 900);
@@ -200,11 +206,15 @@ export class Game {
     this.gameCam.orbit(0.016, this.player.root.position, 7, 1.4, 0.1, this.world);
     this.world.update(0, this.camera, this.env);
     const tc = performance.now();
+    // compile the rain and lightning shaders now too, not at the first shower
+    const warm = this.weather.warmupObjects();
+    for (const o of warm) o.visible = true;
     try {
       await this.renderer.compileAsync(this.scene, this.camera);
     } catch {
       this.renderer.compile(this.scene, this.camera);
     }
+    for (const o of warm) o.visible = false;
     console.info(`[horizon] shaders ready in ${Math.round(performance.now() - tc)} ms`);
     await nextFrame();
 
@@ -309,6 +319,7 @@ export class Game {
     }
     this.post.setBloom(Q.bloom);
     this.post.setQuality({ msaa: Q.msaa, scale: 1 });
+    this.weather?.setQuality(q);
     if (!first && this.world?.vegetation) {
       this.world.vegetation.quality = Q.veg;
       this.world.vegetation.update(this.camera.position, true);
@@ -766,7 +777,8 @@ export class Game {
     }
     // the cabin renders from inside only while the camera sits in the driver's seat
     this.player.setInteriorView(this.gameCam.inCar && (this.state === 'freeroam' || this.state === 'race' || this.state === 'results') && this.race.active?.state !== 'intro');
-    // environment + world streaming
+    // weather, then the sky and light it shapes; world streaming
+    this.weather.update(dt);
     this.env.update(dt, this.inspectionFocus || this.player.root.position);
     this.farShadow.update(this._lightDir.subVectors(this.env.sun.position, this.env.sun.target.position).normalize());
     if (this.env.forceLights) this.env.lightsOn = true;
@@ -782,7 +794,8 @@ export class Game {
       m.obj.visible = !this.race.running && this.state !== 'environment-inspection';
     }
     for (const v of this.vehicles) v.updateLights(dt, this.env.lightsOn, v.physics.gear < 0, v.physics.input.brake > 0.1 && v.physics.gear >= 0);
-    this.effects.update(dt, 0.1 + (1 - this.env.nightFactor) * 1.0);
+    // particles dim under a storm sky like everything else, and flare with the lightning
+    this.effects.update(dt, 0.1 + (1 - this.env.nightFactor) * (1 - 0.5 * (this.env.climate?.dark ?? 0)) + this.env.flash * 0.6);
     this.net.update(dt);
     this.updateAudio(dt);
     this.updateHUD(dt);
@@ -856,7 +869,7 @@ export class Game {
     this._probeT = (this._probeT || 0) + dt;
     if (probe.ready && this._probeT < perFace) return;
     this._probeT = 0;
-    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.sparks.mesh, this.effects.sand.group, this.effects.snow.group, ...this.markers.map((m) => m.obj)];
+    if (!this._probeHide) this._probeHide = [this.world.vegetation.group, this.world.grass.mesh, this.props.group, this.traffic.group, this.cityLife.group, this.stunts.group, this.effects.smoke.mesh, this.effects.spray.mesh, this.weather.precip.mesh, this.weather.lightning.group, this.effects.sparks.mesh, this.effects.sand.group, this.effects.snow.group, ...this.markers.map((m) => m.obj)];
     const hide = this._probeList || (this._probeList = []);
     hide.length = 0;
     for (const o of this._probeHide) hide.push(o);

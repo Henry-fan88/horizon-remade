@@ -192,13 +192,14 @@ test('world settings: anyone can change them, everyone gets them, joiners too', 
   const saved = [];
   const w = new World({ settings: { timeOfDay: 'night', dayLength: 'bogus' }, onSettings: (s) => saved.push(s) });
   t.after(() => w.stop());
+  const D = { weather: 'auto', season: 'auto' }; // the weather and the season stay automatic
   const a = join(w, 'Ann');
-  assert.deepEqual(a.s.last('welcome').settings, { timeOfDay: 'night', dayLength: 40 }, 'restored, invalid values fall back');
+  assert.deepEqual(a.s.last('welcome').settings, { timeOfDay: 'night', dayLength: 40, ...D }, 'restored, invalid values fall back');
   const b = join(w, 'Bob');
   w.message(b.c, JSON.stringify({ t: 'world', timeOfDay: 'sunset' }));
-  assert.deepEqual(a.s.last('world'), { t: 'world', settings: { timeOfDay: 'sunset', dayLength: 40 }, by: 'Bob', id: b.c.id });
+  assert.deepEqual(a.s.last('world'), { t: 'world', settings: { timeOfDay: 'sunset', dayLength: 40, ...D }, by: 'Bob', id: b.c.id });
   assert.equal(b.s.last('world').settings.timeOfDay, 'sunset', 'the changer hears it back');
-  assert.deepEqual(saved.at(-1), { timeOfDay: 'sunset', dayLength: 40 }, 'the host can keep it');
+  assert.deepEqual(saved.at(-1), { timeOfDay: 'sunset', dayLength: 40, ...D }, 'the host can keep it');
   // too soon for Bob again, invalid values and no-op changes are ignored
   w.message(b.c, JSON.stringify({ t: 'world', timeOfDay: 'noon' }));
   w.message(a.c, JSON.stringify({ t: 'world', timeOfDay: 'midnight', dayLength: 7 }));
@@ -206,11 +207,43 @@ test('world settings: anyone can change them, everyone gets them, joiners too', 
   assert.equal(w.settings.timeOfDay, 'sunset');
   assert.equal(saved.length, 1);
   w.message(a.c, JSON.stringify({ t: 'world', dayLength: 120 }));
-  assert.deepEqual(w.settings, { timeOfDay: 'sunset', dayLength: 120 });
-  assert.deepEqual(join(w, 'Cat').s.last('welcome').settings, { timeOfDay: 'sunset', dayLength: 120 });
+  assert.deepEqual(w.settings, { timeOfDay: 'sunset', dayLength: 120, ...D });
+  assert.deepEqual(join(w, 'Cat').s.last('welcome').settings, { timeOfDay: 'sunset', dayLength: 120, ...D });
   const outsider = w.connect(sock());
   w.message(outsider, JSON.stringify({ t: 'world', timeOfDay: 'noon' }));
   assert.equal(w.settings.timeOfDay, 'sunset', 'only players in the world');
+});
+
+test('weather and season changes are logged in server time so everyone fades them alike', (t) => {
+  const saved = [];
+  const w = new World({ onSettings: (s) => saved.push(s) });
+  t.after(() => w.stop());
+  const a = join(w, 'Ann');
+  const b = join(w, 'Bob');
+  const t0 = Date.now();
+  w.message(a.c, JSON.stringify({ t: 'world', weather: 'storm' }));
+  const s1 = b.s.last('world').settings;
+  assert.equal(s1.weather, 'storm');
+  assert.equal(s1.weatherLog.length, 2, 'the previous value and the change');
+  assert.deepEqual(s1.weatherLog[0], ['auto', 0]);
+  assert.equal(s1.weatherLog[1][0], 'storm');
+  assert.ok(s1.weatherLog[1][1] >= t0 && s1.weatherLog[1][1] <= Date.now(), 'stamped with the server clock');
+  assert.equal(s1.seasonLog, undefined, 'the season did not change');
+  w.message(b.c, JSON.stringify({ t: 'world', season: 'winter', weather: 'snow' }));
+  const s2 = a.s.last('world').settings;
+  assert.deepEqual(s2.weatherLog.map((e) => e[0]), ['auto', 'storm', 'snow']);
+  assert.deepEqual(s2.seasonLog.map((e) => e[0]), ['auto', 'winter']);
+  // a joiner gets the logs too, and a restart keeps them (bad entries dropped)
+  assert.deepEqual(join(w, 'Cat').s.last('welcome').settings.weatherLog, s2.weatherLog);
+  const restored = new World({ settings: { ...saved.at(-1), seasonLog: [['winter', 5], ['bogus', 9]] } });
+  t.after(() => restored.stop());
+  assert.deepEqual(restored.settings.weatherLog, s2.weatherLog);
+  assert.deepEqual(restored.settings.seasonLog, [['winter', 5]], 'unknown entries are dropped');
+  const stale = new World({ settings: { ...saved.at(-1), seasonLog: [['summer', 5]] } });
+  t.after(() => stale.stop());
+  assert.equal(stale.settings.seasonLog, undefined, 'a log that does not end in the current value is dropped');
+  w.message(a.c, JSON.stringify({ t: 'world', weather: 'drizzle' }));
+  assert.equal(w.settings.weather, 'snow', 'unknown weather is ignored');
 });
 
 test('Node server keeps a world\'s settings after it empties', async (t) => {

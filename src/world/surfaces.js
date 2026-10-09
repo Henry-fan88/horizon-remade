@@ -31,3 +31,21 @@ export function tireSurfaceGrip(surface, spec) {
   if (surface.name === 'snow') return surface.grip + 0.05 * clamp(spec.offroad ?? 0.3, 0, 1);
   return surface.offroad ? lerp(surface.grip, Math.max(surface.grip, 0.93), spec.offroad ?? 0.3) : surface.grip;
 }
+
+// The weather on the ground (src/game/weather.js keeps it current; it stays dry in the
+// benches and tests): how wet the surfaces are, how much water stands on them, lying snow.
+export const GROUND = { wet: 0, puddles: 0, snow: 0 };
+
+// How much more (or less) of each off-road surface's grip is lost when it is soaked.
+const WET_OFFROAD = { grass: 0.26, field: 0.22, forest: 0.2, dirt: 0.2, gravel: 0.12, 'gravel trap': 0, dry: 0.18, mud: 0.1, verge: 0.18, ash: 0.12, rock: 0.15, sand: -0.06, snow: 0 };
+
+// Share of a surface's grip left in the current weather: exactly 1 when dry. Wet asphalt
+// keeps ~83%, less again through standing water at speed (aquaplaning); painted kerbs turn
+// slippery; wet grass and dirt get slick; wet sand packs down and grips a little better.
+export function weatherGrip(surface, speed = 0) {
+  const wet = GROUND.wet;
+  if (wet <= 0) return 1;
+  if (surface.name === 'kerb') return 1 - 0.3 * wet;
+  if (!surface.offroad) return 1 - 0.17 * wet - 0.1 * GROUND.puddles * clamp((speed - 18) / 30, 0, 1);
+  return 1 - (WET_OFFROAD[surface.name] ?? 0.15) * wet;
+}

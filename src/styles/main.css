@@ -266,6 +266,35 @@ body {
   border-radius: 50%;
   box-shadow: 0 6px 30px rgba(0, 0, 0, 0.45);
 }
+.weather-chip {
+  position: absolute;
+  left: calc(max(26px, env(safe-area-inset-left)) + 222px);
+  bottom: 34px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px 5px 8px;
+  border-radius: 14px;
+  background: rgba(10, 10, 18, 0.5);
+  font-family: var(--font-cond);
+  font-weight: 600;
+  font-size: 13px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.88);
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+}
+.weather-chip:empty {
+  display: none;
+}
+.weather-chip svg {
+  flex: none;
+}
+.weather-chip[data-season='spring'] svg { color: #9fe58a; }
+.weather-chip[data-season='summer'] svg { color: #ffd21f; }
+.weather-chip[data-season='autumn'] svg { color: #ff8a1f; }
+.weather-chip[data-season='winter'] svg { color: #9fd8ff; }
 .road-name {
   position: absolute;
   left: 30px;
@@ -1687,6 +1716,11 @@ kbd {
   .minimap {
     transform: scale(0.7);
     transform-origin: bottom left;
+  }
+  .weather-chip {
+    left: calc(max(26px, env(safe-area-inset-left)) + 156px);
+    bottom: 30px;
+    font-size: 11px;
   }
 }
 

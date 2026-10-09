@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { mulberry32 } from '../core/math.js';
+import { softWeather } from './weather-surface.js';
 
 const TAU = Math.PI * 2;
 
@@ -153,7 +154,7 @@ export function makeCactusMaterials() {
     return t;
   };
   return [
-    new THREE.MeshStandardMaterial({ map: texture(colors, true), bumpMap: texture(relief, false), bumpScale: 0.012, vertexColors: true, roughness: 0.89, metalness: 0 }),
-    new THREE.MeshStandardMaterial({ color: 0xc7b387, vertexColors: true, roughness: 0.95, side: THREE.DoubleSide }),
+    softWeather(new THREE.MeshStandardMaterial({ map: texture(colors, true), bumpMap: texture(relief, false), bumpScale: 0.012, vertexColors: true, roughness: 0.89, metalness: 0 })),
+    softWeather(new THREE.MeshStandardMaterial({ color: 0xc7b387, vertexColors: true, roughness: 0.95, side: THREE.DoubleSide })),
   ];
 }

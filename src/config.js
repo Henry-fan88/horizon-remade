@@ -45,7 +45,7 @@ export const PHYSICS_HZ = 120;
 
 // Settings that belong to the online world rather than the player (server/hub.js
 // WORLD_OPTIONS): online everyone shares the world's values.
-export const WORLD_SETTINGS = ['timeOfDay', 'dayLength'];
+export const WORLD_SETTINGS = ['timeOfDay', 'dayLength', 'weather', 'season'];
 
 export const DEFAULT_SETTINGS = {
   quality: 'auto', // auto | low | medium | high | ultra
@@ -53,6 +53,8 @@ export const DEFAULT_SETTINGS = {
   units: 'kmh', // kmh | mph
   timeOfDay: 'dynamic', // dynamic | morning | noon | golden | sunset | night
   dayLength: 40, // real minutes per in-game day (nights pass 3x faster)
+  weather: 'auto', // auto | clear | cloudy | rain | storm | fog | snow (src/world/climate.js)
+  season: 'auto', // auto (one real hour each) | spring | summer | autumn | winter
   camera: 0,
   transmission: 'auto', // auto | manual
   drivingLine: 'race', // off | race | full

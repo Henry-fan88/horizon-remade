@@ -220,11 +220,14 @@ export class Effects {
   constructor(scene, world) {
     const smokeTex = makeSmokeTexture();
     this.smoke = new ParticlePool(smokeTex, THREE.NormalBlending);
+    // road spray in the wet has its own pool, so a wet race can't starve the tyre smoke
+    this.spray = new ParticlePool(smokeTex, THREE.NormalBlending);
+    this.wet = 0; // how wet the roads are (src/game/weather.js)
     this.sparks = new ParticlePool(makeSparkTexture(), THREE.AdditiveBlending, false);
     this.skids = new SkidMarks();
     this.sand = new SandEffects(world, this.smoke);
     this.snow = new SnowEffects(world, this.smoke);
-    scene.add(this.smoke.mesh, this.sparks.mesh, this.skids.mesh);
+    scene.add(this.smoke.mesh, this.spray.mesh, this.sparks.mesh, this.skids.mesh);
     scene.add(this.sand.group);
     scene.add(this.snow.group);
     this.light = 1;
@@ -262,8 +265,9 @@ export class Effects {
       this.snow.lift(key);
       const slip = w.slip;
       const paved = !surf.offroad || surf.name === 'verge';
-      // skid marks on asphalt when sliding; ruts on dirt always
-      const skidA = paved ? Math.max(0, slip - 0.35) * 0.9 : Math.min(0.35, speed / 60) * 0.5;
+      const wet = paved ? this.wet : 0;
+      // skid marks on asphalt when sliding (faint on a wet road); ruts on dirt always
+      const skidA = paved ? Math.max(0, slip - 0.35) * 0.9 * (1 - 0.65 * wet) : Math.min(0.35, speed / 60) * 0.5;
       if (skidA > 0.04 && speed > 1) {
         R.set(1, 0, 0).applyQuaternion(p.quat);
         this.skids.add(key, w.point.x, w.point.y + 0.03, w.point.z, R.x, R.z, v.spec.style.wheelW * 0.95, Math.min(0.6, skidA) * (paved ? 1 : 0.5));
@@ -272,8 +276,9 @@ export class Effects {
       let rate = 0;
       let col = surf.dust;
       if (paved) {
-        rate = Math.max(0, slip - 0.45) * 60 * Math.min(1, speed / 6 + w.spinning);
+        rate = Math.max(0, slip - 0.45) * 60 * Math.min(1, speed / 6 + w.spinning) * (1 - 0.75 * wet);
         col = TYRE_SMOKE;
+        if (wet > 0.06 && speed > 5) this.sprayFrom(p, w, i, speed, wet * intensity, dt);
       } else {
         const k = DUST_RATE[surf.name] ?? 0.5;
         rate = (Math.min(1, speed / 25) * 12 + slip * 22) * k;
@@ -306,6 +311,32 @@ export class Effects {
     }
   }
 
+  // a mist of road water thrown up behind a tyre, more at speed and off the rear wheels
+  sprayFrom(p, w, i, speed, wet, dt) {
+    let n = (speed - 5) * 1.3 * wet * (i >= 2 ? 1.5 : 0.7) * dt;
+    while (n > 0) {
+      if (Math.random() < n)
+        this.spray.spawn(
+          w.point.x - p.vel.x * 0.02 + (Math.random() - 0.5) * 0.4,
+          w.point.y + 0.15 + Math.random() * 0.2,
+          w.point.z - p.vel.z * 0.02 + (Math.random() - 0.5) * 0.4,
+          p.vel.x * 0.55 + (Math.random() - 0.5) * 2.5,
+          0.8 + Math.random() * 1.8,
+          p.vel.z * 0.55 + (Math.random() - 0.5) * 2.5,
+          0.5,
+          2.6,
+          0.7 + Math.random() * 0.6,
+          0.8,
+          0.82,
+          0.85,
+          0.1 + 0.12 * wet,
+          2.4,
+          -1.2
+        );
+      n -= 1;
+    }
+  }
+
   sparksAt(x, y, z, vx, vz, count = 20) {
     for (let i = 0; i < count; i++) {
       this.sparks.spawn(x, y, z, vx * 0.4 + (Math.random() - 0.5) * 9, Math.random() * 5 + 1, vz * 0.4 + (Math.random() - 0.5) * 9, 0.12, -0.05, 0.35 + Math.random() * 0.4, 1.0, 0.65, 0.25, 1, 0.6, -14);
@@ -334,6 +365,7 @@ export class Effects {
 
   update(dt, lightLevel) {
     this.smoke.update(dt, lightLevel);
+    this.spray.update(dt, lightLevel);
     this.sparks.update(dt, 3);
     this.sand.update(dt, lightLevel);
     this.snow.update(dt, lightLevel);

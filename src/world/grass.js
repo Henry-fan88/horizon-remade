@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { mulberry32 } from '../core/math.js';
 import { atmo } from './sky.js';
 import { useFarShadow } from '../render/farshadow.js';
+import { softWeather } from './weather-surface.js';
 
 function clumpGeometry(rnd) {
   const pos = [],
@@ -92,7 +93,7 @@ export class Grass {
       tColor: { value: colorTex },
       uTime: atmo.time,
     };
-    const mat = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, side: THREE.DoubleSide });
+    const mat = softWeather(new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, side: THREE.DoubleSide }));
     mat.onBeforeCompile = (sh) => {
       Object.assign(sh.uniforms, this.uniforms);
       sh.vertexShader = sh.vertexShader

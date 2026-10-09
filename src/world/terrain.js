@@ -6,13 +6,14 @@ import { SURF } from './worldgen.js';
 import { useFarShadow } from '../render/farshadow.js';
 import { sandReliefGLSL } from './sand-material.js';
 import { snowReliefGLSL } from './snow-material.js';
+import { softWeather } from './weather-surface.js';
 
 const CHUNK = 64;
 const STEPS = [1, 2, 4, 8];
 const LOD_DIST = [260, 720, 1500];
 
 function createFallbackTerrainMaterial(detailTex) {
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0.0 });
+  const mat = softWeather(new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0.0 }));
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.tDetail = { value: detailTex };
     shader.vertexShader = shader.vertexShader
@@ -144,7 +145,7 @@ function createLayerMasks(world, hf) {
 // are drawn (the scans average out to that anyway).
 function createLayeredTerrainMaterial(detailTex, world, hf, arrays) {
   const masks = createLayerMasks(world, hf);
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0 });
+  const mat = softWeather(new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0 }));
   mat.name = 'Layered photographic terrain';
   mat.userData.surfaceMode = 'layered-pbr';
   mat.userData.layers = { arrays, masks }; // for inspection in dev tools
@@ -396,7 +397,7 @@ export function createTerrainMaterial(detailTex, world, hf) {
     return createFallbackTerrainMaterial(detailTex);
   }
   const biomeMask = createBiomeMask(world, hf);
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0 });
+  const mat = softWeather(new THREE.MeshStandardMaterial({ roughness: 0.94, metalness: 0 }));
   mat.name = 'Photographic terrain';
   mat.userData.surfaceMode = 'photographic-pbr';
   mat.userData.surfaceAssets = [assets.grass.id, assets.dirt.id, assets.rock.id];

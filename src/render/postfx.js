@@ -21,6 +21,8 @@ uniform float sharpen;
 uniform float fade;
 uniform vec3 fadeColor;
 uniform float flash;
+uniform float lensRain;
+uniform float lensWind;
 varying vec2 vUv;
 
 vec3 RRTAndODTFit( vec3 v ) {
@@ -41,9 +43,41 @@ vec3 toSRGB( vec3 c ) {
 }
 float hash( vec2 p ) { return fract( sin( dot( p, vec2( 12.9898, 78.233 ) ) ) * 43758.5453 ); }
 
+// Rain beading on the camera lens: drops in two cell grids, each appearing, lingering for a
+// few seconds and drying off at its own pace, fewer of them clinging at speed. A drop is a
+// tiny lens: the scene inside it is seen shrunk and upside down, with a sky highlight.
+// Returns the refraction offset (xy), drop cover (z) and highlight (w).
+vec4 lensDrops( vec2 uv, float t ) {
+  vec2 aspect = vec2( resolution.x / resolution.y, 1.0 );
+  vec4 acc = vec4( 0.0 );
+  for ( int k = 0; k < 2; k ++ ) {
+    float fk = float( k );
+    vec2 p = uv * aspect * ( 6.0 + fk * 5.0 ) + vec2( fk * 0.37, 0.0 );
+    vec2 cell = floor( p );
+    vec2 f = fract( p ) - 0.5;
+    float h = hash( cell + fk * 13.1 );
+    float cycle = t * ( 0.1 + h * 0.14 ) + h * 7.0;
+    float life = fract( cycle );
+    float present = step( 1.0 - lensRain * ( 0.5 - 0.35 * lensWind ), hash( cell * 1.7 + floor( cycle ) ) );
+    vec2 c = ( vec2( hash( cell + 3.3 + floor( cycle ) ), hash( cell + 7.7 + floor( cycle ) ) ) - 0.5 ) * 0.55;
+    float r = mix( 0.1, 0.26, hash( cell + 9.1 ) ) * ( 1.0 - life * 0.35 );
+    vec2 d = ( f - c ) * vec2( 1.0, 1.0 + lensWind * 0.6 );
+    float m = smoothstep( r, r * 0.6, length( d ) ) * present * smoothstep( 0.0, 0.06, life ) * ( 1.0 - smoothstep( 0.65, 1.0, life ) );
+    acc.xy -= d / max( r, 1e-3 ) * m * 0.032 / ( ( 6.0 + fk * 5.0 ) * 0.17 );
+    acc.z = max( acc.z, m );
+    acc.w += smoothstep( r * 0.45, r * 0.1, length( d - vec2( -0.32, 0.38 ) * r ) ) * m;
+  }
+  return acc;
+}
+
 void main() {
   vec2 uv = vUv;
   vec2 px = 1.0 / resolution;
+  vec4 drop = vec4( 0.0 );
+  if ( lensRain > 0.01 ) {
+    drop = lensDrops( vUv, time );
+    uv += drop.xy;
+  }
   vec3 col = texture2D( tDiffuse, uv ).rgb;
   if ( any( isnan( col ) ) || any( isinf( col ) ) ) col = vec3( 0.0 );
   if ( sharpen > 0.0 ) {
@@ -74,6 +108,8 @@ void main() {
   col += vec3( 0.012, 0.006, -0.008 ) * smoothstep( 0.4, 1.0, l ) + vec3( -0.005, 0.0, 0.007 ) * ( 1.0 - smoothstep( 0.0, 0.4, l ) );
   vec2 vv = ( vUv - 0.5 ) * vec2( 1.0, 0.85 );
   col *= 1.0 - dot( vv, vv ) * vignette;
+  // a drop is a little darker towards its rim and catches a highlight from the sky
+  col = col * ( 1.0 - drop.z * 0.05 ) + drop.w * 0.07;
   col = mix( col, fadeColor, fade );
   col += flash;
   col += ( hash( gl_FragCoord.xy + fract( time ) * 100.0 ) - 0.5 ) / 255.0;
@@ -245,6 +281,8 @@ export class PostFX {
       fade: { value: 0 },
       fadeColor: { value: new THREE.Color(0, 0, 0) },
       flash: { value: 0 },
+      lensRain: { value: 0 },
+      lensWind: { value: 0 },
     };
     this.quad = new FullScreenQuad(
       new THREE.ShaderMaterial({

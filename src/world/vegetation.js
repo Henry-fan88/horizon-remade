@@ -10,6 +10,7 @@ import { atmo } from './sky.js';
 import { useFarShadow } from '../render/farshadow.js';
 import { buildCactus, makeCactusMaterials } from './cactus.js';
 import { buildSnowPine, makeBranchSnowMaterial } from './snow-pine.js';
+import { softWeather } from './weather-surface.js';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -405,11 +406,11 @@ export class Vegetation {
     const barkBirch = makeFoliageBark('birch');
     const barkPalm = makeFoliageBark('palm');
     const leafMat = (map, tint, wind) => {
-      const m = new THREE.MeshStandardMaterial({ map, color: tint, alphaTest: 0.38, side: THREE.DoubleSide, roughness: 0.92, metalness: 0, alphaToCoverage: true });
+      const m = softWeather(new THREE.MeshStandardMaterial({ map, color: tint, alphaTest: 0.38, side: THREE.DoubleSide, roughness: 0.92, metalness: 0, alphaToCoverage: true }));
       windify(m, wind, this.time);
       return m;
     };
-    const barkMat = (textures) => new THREE.MeshStandardMaterial({ ...textures, bumpScale: 0.045, roughness: 0.98, metalness: 0 });
+    const barkMat = (textures) => softWeather(new THREE.MeshStandardMaterial({ ...textures, bumpScale: 0.045, roughness: 0.98, metalness: 0 }));
     this.materials = {
       broadleaf: [barkMat(barkOak), leafMat(leafBroad, 0xffffff, 0.018)],
       birch: [barkMat(barkBirch), leafMat(leafBirch, 0xf4f1da, 0.024)],

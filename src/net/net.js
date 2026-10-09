@@ -29,6 +29,8 @@ const AIRBORNE = [-1, -1, -1, -1];
 const WORLD_LABELS = {
   timeOfDay: { dynamic: 'dynamic day/night', morning: 'morning', noon: 'midday', golden: 'golden hour', sunset: 'sunset', night: 'night' },
   dayLength: { 20: '20-minute days', 40: '40-minute days', 60: '1-hour days', 120: '2-hour days' },
+  weather: { auto: 'changing weather', clear: 'clear skies', cloudy: 'clouds', rain: 'rain', storm: 'a thunderstorm', fog: 'fog', snow: 'snow' },
+  season: { auto: 'changing seasons', spring: 'spring', summer: 'summer', autumn: 'autumn', winter: 'winter' },
 };
 
 // One number per wheel for other players' tyre effects: -1 airborne, else

@@ -25,6 +25,7 @@ uniform vec3 horizonSunCol;
 uniform vec3 zenithCol;
 uniform float lightLevel;
 uniform float worldSize;
+uniform float rain;
 varying vec3 vWPos;
 #include <fog_pars_fragment>
 
@@ -41,7 +42,8 @@ void main() {
   vec2 n3 = texture2D( tNormal, uv * 0.087 + vec2( time * 0.019, -time * 0.017 ) ).xy * 2.0 - 1.0;
   vec2 n4 = texture2D( tNormal, uv * 0.23 + vec2( -time * 0.03, -time * 0.024 ) ).xy * 2.0 - 1.0;
   vec2 swell = vec2(sin(dot(uv, vec2(0.07, 0.12)) + n1.x * 5.0 - time * 0.8), cos(dot(uv, vec2(-0.1, 0.045)) + n2.y * 4.0 - time * 0.55));
-  vec2 nxy = n1 * 0.65 + n2 * 0.5 + n3 * 0.32 + swell * 0.035 + n4 * 0.2 * ( 1.0 - smoothstep( 20.0, 120.0, dist ) );
+  // rain roughens the surface: more fine chop, strongest close by where the drops show
+  vec2 nxy = n1 * 0.65 + n2 * 0.5 + n3 * 0.32 * ( 1.0 + rain * 0.8 ) + swell * 0.035 + n4 * ( 0.2 + rain * 0.55 ) * ( 1.0 - smoothstep( 20.0, 120.0, dist ) );
   float flatten = smoothstep( 150.0, 2500.0, dist );
   vec3 N = normalize( vec3( nxy.x * 0.32 * ( 1.0 - flatten * 0.75 ), 1.0, nxy.y * 0.32 * ( 1.0 - flatten * 0.75 ) ) );
   float ndv = max( dot( N, V ), 0.0 );
@@ -94,6 +96,7 @@ export class Water {
       zenithCol: { value: new THREE.Color() },
       lightLevel: { value: 1 },
       worldSize: { value: worldSize },
+      rain: { value: 0 },
     };
     this.material = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -123,5 +126,6 @@ export class Water {
     u.zenithCol.value.copy(env.fogCol).multiply(new THREE.Color(0.55, 0.7, 1.05));
     const sunUp = Math.max(0, env.sunDir.y);
     u.lightLevel.value = 0.05 + sunUp * 0.9 + env.fogCol.g * 2.0;
+    u.rain.value = env.climate ? env.climate.rain : 0;
   }
 }

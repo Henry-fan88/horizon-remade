@@ -404,6 +404,18 @@ export class Minimap {
   }
 }
 
+// small line icons for the weather chip
+const cloudPath = 'M7 17h10a4 4 0 0 0 .4-8A6 6 0 0 0 6 10a3.5 3.5 0 0 0 1 7z';
+const svg = (inner) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const WEATHER_ICONS = {
+  clear: svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'),
+  cloudy: svg(`<path d="${cloudPath}"/>`),
+  rain: svg('<path d="M7 14h10a4 4 0 0 0 .4-8A6 6 0 0 0 6 7a3.5 3.5 0 0 0 1 7z"/><path d="M8 17l-1 3M12 17l-1 3M16 17l-1 3"/>'),
+  storm: svg('<path d="M7 14h10a4 4 0 0 0 .4-8A6 6 0 0 0 6 7a3.5 3.5 0 0 0 1 7z"/><path d="M12 14l-2 4h3l-2 4"/>'),
+  fog: svg('<path d="M4 9h16M6 13h14M4 17h12"/>'),
+  snow: svg('<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M10 4.5l2 1.5 2-1.5M10 19.5l2-1.5 2 1.5"/>'),
+};
+
 // ---------------------------------------------------------------- HUD container
 export class HUD {
   constructor(root, mapImages) {
@@ -421,6 +433,8 @@ export class HUD {
     this.race = el('div', 'race-info', this.root);
     this.topRight = el('div', 'top-right', this.root);
     this.fps = el('div', 'fps', this.root);
+    // the world's weather and season, beside the minimap
+    this.weatherChip = el('div', 'weather-chip', this.root);
     this.road = el('div', 'road-name', this.root);
     this.stunt = el('div', 'stunt-meter', this.root);
     // driver-aid lights and the damage diagram, above the speedometer
@@ -449,6 +463,11 @@ export class HUD {
     this.visible = true;
     this.lastRoad = '';
     this.shiftFlash = 0;
+  }
+
+  setWeather(weather, season, text) {
+    this.weatherChip.innerHTML = `${WEATHER_ICONS[weather] || ''}<span>${text}</span>`;
+    this.weatherChip.dataset.season = season;
   }
 
   show(v) {

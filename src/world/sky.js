@@ -11,6 +11,9 @@ export const atmo = {
   sunDir: { x: 0.3, y: 0.5, z: 0.4 },
   sunFogColor: { x: 1, y: 0.8, z: 0.6 },
   fogParams: { x: 0.00022, y: 0.0045, z: 0, w: 14 }, // density, height falloff, base height, sun power
+  // a fog bank over one area (the city's sea fog): centre x/z, radius, density (0 = none)
+  fogBank: { x: 0, y: 0, z: 1, w: 0 },
+  fogBankShape: { x: 60, y: 0.035 }, // top of the bank (m), how fast it thins above that
   time: { value: 0 },
 };
 
@@ -32,6 +35,8 @@ export function installAtmosphere() {
   uniform vec3 fogSunColor;
   uniform vec3 fogSunDir;
   uniform vec4 fogParams;
+  uniform vec4 fogBank;
+  uniform vec2 fogBankShape;
   varying vec3 vFogWorldPos;
   vec3 applyAtmosphere( vec3 col, vec3 worldPos ) {
     vec3 ray = worldPos - cameraPosition;
@@ -42,6 +47,16 @@ export function installAtmosphere() {
     float k = b * ray.y;
     float integ = abs( k ) > 1e-4 ? ( 1.0 - exp( -k ) ) / k : 1.0;
     float amt = fogParams.x * exp( -b * h0 ) * dist * integ;
+    if ( fogBank.w > 0.0 ) {
+      // the bank's density averaged along the ray (low-lying, thinning above its top)
+      float bank = 0.0;
+      for ( int i = 0; i < 3; i ++ ) {
+        vec3 sp = cameraPosition + ray * ( ( float( i ) + 0.5 ) / 3.0 );
+        vec2 d = ( sp.xz - fogBank.xy ) / fogBank.z;
+        bank += exp( -dot( d, d ) ) * exp( -max( sp.y - fogBankShape.x, 0.0 ) * fogBankShape.y );
+      }
+      amt += fogBank.w * bank * dist / 3.0;
+    }
     float f = 1.0 - exp( -amt );
     float s = pow( max( dot( dir, fogSunDir ), 0.0 ), fogParams.w );
     return mix( col, mix( fogColor, fogSunColor, s ), f );
@@ -62,6 +77,8 @@ export function fogExtraUniforms() {
     fogSunColor: { value: atmo.sunFogColor },
     fogSunDir: { value: atmo.sunDir },
     fogParams: { value: atmo.fogParams },
+    fogBank: { value: atmo.fogBank },
+    fogBankShape: { value: atmo.fogBankShape },
   };
 }
 
@@ -174,6 +191,8 @@ uniform vec3 horizonColor;
 uniform vec3 horizonSunColor;
 uniform float skyScale;
 uniform float starMoon;
+uniform float overcast;
+uniform float haze;
 
 const float pi = 3.141592653589793;
 const float rayleighZenithLength = 8.4E3;
@@ -228,6 +247,9 @@ void main() {
   vec3 L0 = vec3( 0.1 ) * Fex;
   float sundisc = smoothstep( sunAngularDiameterCos, sunAngularDiameterCos + 0.00002, cosTheta ) * showSun;
   vec3 col = ( ( Lin + L0 ) * 0.04 + vec3( 0.0, 0.0003, 0.00075 ) ) * skyScale;
+  // overcast: the blue drains out of the sky and it dims
+  float skyLuma = dot( col, vec3( 0.2126, 0.7152, 0.0722 ) );
+  col = mix( col, vec3( skyLuma ) * vec3( 0.93, 0.97, 1.0 ), overcast * 0.75 ) * ( 1.0 - overcast * 0.45 );
   col += ( 900.0 * sundisc ) * min( vSunE * Fex, 60.0 ) * 0.04 * 0.35 * skyScale;
 
   // night sky: deep blue gradient + stars + moon
@@ -256,10 +278,11 @@ void main() {
     float evolve = time * 0.01;
     float n = clamp( fbm( uv * 1.6, evolve ) * 0.7 + 0.5, 0.0, 1.0 );
     float region = gnoise( uv * 0.35 ) * 0.37 + 0.5;
-    float cov = clamp( cloudCoverage + ( region - 0.5 ) * 0.7, 0.0, 1.0 );
+    // an overcast closes the gaps between cloud banks
+    float cov = clamp( cloudCoverage + ( region - 0.5 ) * 0.7 * ( 1.0 - overcast * 0.85 ), 0.0, 1.0 );
     float thr = 1.0 - cov;
     float mask = smoothstep( thr, thr + 0.28, n );
-    float horizonFade = smoothstep( 0.0, 0.12, direction.y );
+    float horizonFade = smoothstep( 0.0, mix( 0.12, 0.035, overcast ), direction.y );
     mask *= horizonFade;
     float day = smoothstep( -0.1, 0.25, vSunDirection.y );
     vec3 sunCol = vSunE * Fex * 0.22 * 0.04 * skyScale;
@@ -273,11 +296,15 @@ void main() {
     // Neutral multiple scattering gives clouds a lit body, instead of tinting
     // the entire cloud with the blue radiance sampled behind it.
     float ambientLuma = dot(amb, vec3(0.2126, 0.7152, 0.0722));
-    vec3 cc = mix(amb, vec3(ambientLuma), 0.55) * 1.35 + sunCol * shade * 1.2;
-    cc += sunCol * silver * edge * 0.7;
+    vec3 cc = mix(amb, vec3(ambientLuma), 0.55) * 1.35 + sunCol * shade * 1.2 * ( 1.0 - overcast * 0.6 );
+    cc += sunCol * silver * edge * 0.7 * ( 1.0 - overcast );
+    // storm clouds: dark grey, darkest in their thick middles
+    cc *= mix( 1.0, mix( 0.62, 0.3, clamp( depth * 2.5, 0.0, 1.0 ) ), overcast );
     cc *= max( day, 0.0 );
     cc += nightCol * 1.6 * night;
     float alpha = ( 1.0 - exp( depth * cloudDensity * -12.0 ) ) * horizonFade;
+    // a rain overcast is one unbroken layer: no blue through the thin spots
+    alpha = max( alpha, smoothstep( 0.3, 0.6, overcast ) * smoothstep( 0.85, 1.0, cloudCoverage ) * horizonFade );
     vec3 aerial = mix( col, cc, clamp( Fex * 1.2, 0.0, 1.0 ) );
     col = mix( col, aerial, alpha );
     cloudA = alpha;
@@ -289,6 +316,8 @@ void main() {
   float s = pow( max( dot( normalize( dh ), normalize( sh ) ), 0.0 ), 6.0 );
   vec3 hz = mix( horizonColor, horizonSunColor, s );
   col = mix( col, hz, smoothstep( 0.1, -0.01, direction.y ) * 0.85 );
+  // fog and heavy rain wash the sky out towards the fog colour, most of all near the horizon
+  col = mix( col, hz, haze * ( 1.0 - 0.3 * smoothstep( 0.0, 0.9, direction.y ) ) );
   if ( direction.y < 0.0 ) col = mix( hz, groundColor, groundMix * smoothstep( 0.0, -0.15, direction.y ) );
   col = max( col, vec3( 0.0 ) );
   if ( any( isnan( col ) ) ) col = hz;
@@ -319,6 +348,7 @@ uniform vec3 sunDiscColor;
 uniform vec3 moonDirection;
 uniform float night;
 uniform float time;
+uniform float flash;
 varying vec3 vDir;
 float hash13( vec3 p3 ) {
   p3 = fract( p3 * 0.1031 );
@@ -330,6 +360,8 @@ void main() {
   vec4 sky = textureCube( tSky, direction );
   vec3 col = sky.rgb;
   float clear = 1.0 - sky.a;
+  // lightning lights the clouds from inside, and the whole sky a little
+  col += vec3( 0.55, 0.6, 0.75 ) * flash * ( 0.012 + 0.05 * sky.a );
   float cosTheta = dot( direction, sunDirection );
   col += sunDiscColor * smoothstep( 0.99995, 0.99997, cosTheta ) * clear;
   if ( night > 0.01 && direction.y > 0.0 ) {
@@ -369,6 +401,8 @@ export class Sky {
       horizonSunColor: { value: new THREE.Color() },
       skyScale: { value: SKY_EXPOSURE },
       starMoon: { value: 1 },
+      overcast: { value: 0 },
+      haze: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -411,6 +445,7 @@ export class SkyView {
       moonDirection: this.source.uniforms.moonDirection,
       night: this.source.uniforms.night,
       time: this.source.uniforms.time,
+      flash: { value: 0 },
     };
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
@@ -553,6 +588,11 @@ export class Environment {
     this.nightFactor = 0;
     this.lightsOn = false;
     this._tmp = [0, 0, 0];
+    // weather (src/world/climate.js state, set by the game each frame; null = fair weather)
+    this.climate = null;
+    this.flash = 0; // lightning lighting the land
+    this.skyFlash = 0; // lightning lighting the clouds
+    this.lastEnvWeather = [-1, -1, -1];
   }
 
   setMode(mode) {
@@ -578,6 +618,15 @@ export class Environment {
     u.rayleigh.value = lerp(1.25, 2.4, low);
     u.mieCoefficient.value = lerp(0.0028, 0.0052, low);
     u.sunDirection.value.copy(sunDir);
+    // weather: cloud cover, how much the overcast dims the light, extra haze
+    const cl = this.climate;
+    const cloud = cl ? cl.cloud : 0,
+      dark = cl ? cl.dark : 0,
+      fogW = cl ? cl.fog : 0;
+    u.cloudCoverage.value = 0.38 + 0.62 * cloud;
+    u.cloudDensity.value = 0.55 + 0.45 * cloud;
+    u.overcast.value = dark;
+    u.haze.value = smoothstep(0.25, 1, fogW) * 0.95;
     const night = smoothstep(0.02, -0.16, elev);
     this.nightFactor = night;
     u.night.value = night;
@@ -601,6 +650,14 @@ export class Environment {
       c2[i] = Math.min(c2[i], c1[i] * 1.45 + 0.01);
       c2[i] = lerp(c2[i], nightFog[i] * 1.2, night);
     }
+    // under an overcast the haze turns grey and dim, with no glow towards the hidden sun
+    if (dark > 0) {
+      const lum = 0.2126 * c1[0] + 0.7152 * c1[1] + 0.0722 * c1[2];
+      for (let i = 0; i < 3; i++) {
+        c1[i] = lerp(c1[i], lum * OVERCAST_FOG[i], dark * 0.8) * (1 - 0.3 * dark);
+        c2[i] = lerp(c2[i], c1[i], dark);
+      }
+    }
     this.fogCol.setRGB(c1[0], c1[1], c1[2], THREE.LinearSRGBColorSpace);
     this.fogSunCol.setRGB(c2[0], c2[1], c2[2], THREE.LinearSRGBColorSpace);
     this.scene.fog.color.copy(this.fogCol);
@@ -610,10 +667,14 @@ export class Environment {
     atmo.sunDir.x = sunDir.x;
     atmo.sunDir.y = sunDir.y;
     atmo.sunDir.z = sunDir.z;
-    atmo.fogParams.x = lerp(0.00042, 0.0006, low) * (1 + night * 0.5);
+    // fog weather is ~35x the fair-weather haze (about 100 m to see) and lies low: hilltops
+    // rise out of it
+    atmo.fogParams.x = lerp(0.00042, 0.0006, low) * (1 + night * 0.5) * (1 + 34 * Math.pow(fogW, 2.2));
+    atmo.fogParams.y = 0.0045 + 0.008 * smoothstep(0.5, 1, fogW);
+    this.updateFogBank(cl);
     u.horizonColor.value.copy(this.fogCol);
     u.horizonSunColor.value.copy(this.fogSunCol);
-    for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'night']) this.envSky.uniforms[k].value = u[k].value;
+    for (const k of ['turbidity', 'rayleigh', 'mieCoefficient', 'night', 'cloudCoverage', 'cloudDensity', 'overcast', 'haze']) this.envSky.uniforms[k].value = u[k].value;
     this.envSky.uniforms.sunDirection.value.copy(sunDir);
     this.envSky.uniforms.moonDirection.value.copy(u.moonDirection.value);
     this.envSky.uniforms.horizonColor.value.copy(this.fogCol);
@@ -624,25 +685,32 @@ export class Environment {
     const warm = 1 - smoothstep(0.03, 0.5, elev);
     this.sunColor.setRGB(1.0, lerp(0.96, 0.62, warm), lerp(0.9, 0.36, warm), THREE.SRGBColorSpace);
     let intensity = lerp(0, 3.3, sunUp) * lerp(1, 0.85, warm);
+    // the overcast blocks most of the direct light and blurs the shadows away
+    const direct = 1 - 0.82 * dark;
+    this.sun.shadow.intensity = 1 - 0.7 * dark;
     // moonlight when the sun is down
     if (night > 0.5) {
       this.sun.color.setRGB(0.55, 0.65, 1.0);
-      this.sun.intensity = 0.45 * night;
+      this.sun.intensity = 0.45 * night * direct;
       this.sun.position.copy(u.moonDirection.value);
     } else {
       this.sun.color.copy(this.sunColor);
-      this.sun.intensity = intensity;
+      this.sun.intensity = intensity * direct;
       this.sun.position.copy(sunDir);
     }
     // ground colour for env reflections
     const gl = 0.06 * sunUp + 0.004;
     this.envSky.uniforms.groundColor.value.setRGB(gl * 0.55, gl * 0.6, gl * 0.45);
-    this.hemi.intensity = lerp(0.2, 0.09, night);
-    this.hemi.color.setRGB(lerp(0.75, 0.25, night), lerp(0.85, 0.3, night), lerp(1.0, 0.5, night));
+    // diffuse sky light takes over under clouds; lightning lights everything for an instant
+    this.hemi.intensity = lerp(0.2, 0.09, night) * (1 + 0.7 * dark) + this.flash * 1.4;
+    this.hemi.color.setRGB(lerp(lerp(0.75, 0.25, night), 0.74, dark * 0.6), lerp(lerp(0.85, 0.3, night), 0.8, dark * 0.6), lerp(lerp(1.0, 0.5, night), 0.88, dark * 0.6));
+    if (this.flash > 0) this.hemi.color.lerp(FLASH_COLOR, Math.min(1, this.flash));
     this.hemi.groundColor.setRGB(0.25, 0.22, 0.15);
     this.scene.environmentIntensity = lerp(1.0, 0.5, night);
-    this.lightsOn = elev < 0.07;
-    this.exposure = lerp(1.0, 3.0, night) * lerp(1, 1.15, warm * (1 - night));
+    this.lightsOn = elev < 0.07 || dark > 0.72 || fogW > 0.8;
+    // eyes (and cameras) open up a little under a dark sky
+    this.exposure = lerp(1.0, 3.0, night) * lerp(1, 1.15, warm * (1 - night)) * (1 + 0.3 * dark);
+    this.skyView.uniforms.flash.value = this.skyFlash;
 
     // Shadow camera follows the focus point with texel snapping
     if (focus) {
@@ -678,11 +746,34 @@ export class Environment {
     }
     this.skyView.update(this.renderer);
 
-    // refresh env map when the sun has moved enough
+    // refresh env map when the sun has moved or the weather changed enough
     this.envTimer -= dt;
-    if (Math.abs(this.hour - this.lastEnvHour) > 0.08 || this.envTimer < -20) {
+    const lw = this.lastEnvWeather;
+    const weatherMoved = Math.abs(cloud - lw[0]) > 0.04 || Math.abs(dark - lw[1]) > 0.04 || Math.abs(fogW - lw[2]) > 0.05;
+    if (Math.abs(this.hour - this.lastEnvHour) > 0.08 || this.envTimer < -20 || weatherMoved) {
+      lw[0] = cloud;
+      lw[1] = dark;
+      lw[2] = fogW;
       this.refreshEnvMap();
     }
+  }
+
+  // The city's sea fog: on mornings and evenings a bank rolls in off the water over the
+  // San Francisco district, thickest in summer ("Karl the Fog"); storms blow it away.
+  updateFogBank(cl) {
+    const b = atmo.fogBank;
+    if (!cl) {
+      b.w = 0;
+      return;
+    }
+    const s = cl.seasons;
+    const season = s[0] * 0.6 + s[1] * 1 + s[2] * 0.45 + s[3] * 0.25;
+    const bump = (h, c, w) => Math.max(0, 1 - ((h - c) / w) ** 2);
+    const time = Math.max(bump(this.hour, 7.3, 2.8), bump(this.hour, 21.5, 3.2), bump(this.hour - 24, 21.5, 3.2));
+    b.x = SEA_FOG.x;
+    b.y = SEA_FOG.z;
+    b.z = SEA_FOG.r;
+    b.w = SEA_FOG.density * season * time * (1 - 0.7 * cl.storm) * (1 - 0.4 * cl.wind);
   }
 
   refreshEnvMap() {
@@ -704,6 +795,10 @@ function setNorm(o, x, y, z) {
 }
 
 const NIGHT_FOG = [0.0035, 0.0055, 0.011];
+const OVERCAST_FOG = [0.95, 0.98, 1.02];
+const FLASH_COLOR = new THREE.Color(0.8, 0.86, 1.0);
+// where the city's sea fog sits: over the San Francisco district and the water east of it
+const SEA_FOG = { x: 1180, z: 220, r: 640, density: 0.0075 };
 const _L = new THREE.Vector3();
 const _X = new THREE.Vector3(1, 0, 0);
 const _Y = new THREE.Vector3(0, 1, 0);

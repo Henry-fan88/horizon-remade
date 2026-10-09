@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { clamp, lerp } from '../core/math.js';
 import { torqueCurve } from './carspecs.js';
-import { SURFACE_INFO, tireSurfaceGrip } from '../world/surfaces.js';
+import { SURFACE_INFO, tireSurfaceGrip, weatherGrip } from '../world/surfaces.js';
 import { WORLD } from '../config.js';
 
 const G = 9.81;
@@ -606,7 +606,8 @@ export class VehiclePhysics {
       // standing water under the tyre: less grip as it gets deeper (aquaplaning)
       const wet = this.seaLevel - w.point.y;
       const wetK = wet > 0 ? 1 - 0.55 * Math.min(1, wet / 0.45) : 1;
-      const mu = s.grip * offK * this.gripMul * wetK * clamp(loadK, 0.75, 1.15);
+      // rain on the road (weatherGrip is exactly 1 in the dry, so dry results don't move)
+      const mu = s.grip * offK * this.gripMul * wetK * weatherGrip(surf, Math.abs(vLong)) * clamp(loadK, 0.75, 1.15);
       const maxF = mu * Fz;
       lateralForce += maxF;
       // An unloaded contact has no friction budget. Avoid 0/0 in TC and the ellipse.

@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { buildRealCar } from './realcar.js';
 import { buildImportedCar } from './importedcars.js';
+import { excludeFromWeather } from '../world/weather-surface.js';
 
 export function makePaintMaterial(color, finish = 'gloss') {
   const c = new THREE.Color(color);
@@ -19,7 +20,10 @@ export function makePaintMaterial(color, finish = 'gloss') {
 export function buildCar(style, paint = {}) {
   const paintMat = makePaintMaterial(paint.color ?? '#c81d25', paint.finish ?? 'gloss');
   const detailed = style.visualAsset === 'ferrari-458' ? buildRealCar(style, paint, paintMat) : buildImportedCar(style, paint, paintMat);
-  return detailed || buildStandIn(style, paintMat);
+  const car = detailed || buildStandIn(style, paintMat);
+  // puddles and snow are laid out in world space: they would slide over a moving body
+  excludeFromWeather(car.group);
+  return car;
 }
 
 // A plain painted block on four wheels with the same interface as the detailed cars. It

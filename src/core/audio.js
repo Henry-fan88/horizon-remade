@@ -126,6 +126,25 @@ export class AudioEngine {
     this.windGain = ctx.createGain();
     this.windGain.gain.value = 0;
     wn.connect(this.windLP).connect(this.windGain).connect(this.sfxBus);
+    // rain: a hiss of drops on the land outside, a lower drumming on the roof from inside
+    const pn = this.noiseSource();
+    this.rainHP = ctx.createBiquadFilter();
+    this.rainHP.type = 'highpass';
+    this.rainHP.frequency.value = 600;
+    this.rainLP = ctx.createBiquadFilter();
+    this.rainLP.type = 'lowpass';
+    this.rainLP.frequency.value = 7000;
+    this.rainGain = ctx.createGain();
+    this.rainGain.gain.value = 0;
+    pn.connect(this.rainHP).connect(this.rainLP).connect(this.rainGain).connect(this.sfxBus);
+    // weather wind: gusts in the trees and round the car, whatever the car's speed
+    const gn2 = this.noiseSource();
+    this.gustLP = ctx.createBiquadFilter();
+    this.gustLP.type = 'lowpass';
+    this.gustLP.frequency.value = 300;
+    this.gustGain = ctx.createGain();
+    this.gustGain.gain.value = 0;
+    gn2.connect(this.gustLP).connect(this.gustGain).connect(this.sfxBus);
     // road rumble (tyre on asphalt)
     const rn = this.noiseSource();
     this.roadLP = ctx.createBiquadFilter();
@@ -413,6 +432,44 @@ export class AudioEngine {
     this.windGain.gain.setTargetAtTime(Math.pow(w, 1.6) * 0.2 * (0.55 + 0.45 * cabin), t, 0.1);
     this.windLP.frequency.setTargetAtTime((300 + speed * 18) * (0.45 + 0.55 * cabin), t, 0.1);
     this.roadGain.gain.setTargetAtTime(grounded ? clamp(speed / 40, 0, 1) * 0.12 * (1 - offroad) * (1 + interior * 0.8) : 0, t, 0.08);
+  }
+
+  // weather beds: rain / snow 0..1, wind 0..1 (already gusting), interior 0..1 (cockpit)
+  setWeather(rain, snow, wind, interior = 0) {
+    if (!this.ready) return;
+    const t = this.ctx.currentTime;
+    this.rainGain.gain.setTargetAtTime(Math.pow(rain, 0.8) * 0.15 * (1 - interior * 0.3), t, 0.5);
+    this.rainHP.frequency.setTargetAtTime(interior ? 160 : 600, t, 0.2);
+    this.rainLP.frequency.setTargetAtTime(interior ? 1600 : 7000, t, 0.2);
+    this.gustGain.gain.setTargetAtTime((wind * wind * 0.08 + snow * 0.015) * (1 - interior * 0.55), t, 0.6);
+    this.gustLP.frequency.setTargetAtTime(220 + wind * 520, t, 0.6);
+  }
+
+  // Thunder from a strike `dist` metres away: a sharp crack when it is close, then a long
+  // rumble that rolls a few times (longer and duller the farther away it is).
+  thunder(dist, power = 1) {
+    if (!this.ready) return;
+    const ctx = this.ctx;
+    const near = 1 / (1 + dist / 700);
+    const vol = power * (0.2 + 0.8 * near);
+    const len = 2.6 + Math.min(4.5, dist / 800);
+    if (dist < 1200) this.burst({ freq: 2400, q: 0.5, type: 'bandpass', dur: 0.4, gain: 0.45 * vol * near, attack: 0.003 });
+    const s = ctx.createBufferSource();
+    s.buffer = this.noiseBuf;
+    s.loop = true;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 110 + 260 * near;
+    lp.Q.value = 0.8;
+    const g = ctx.createGain();
+    const t = ctx.currentTime;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.9 * vol, t + 0.06 + (1 - near) * 0.6);
+    for (let i = 1; i < 4; i++) g.gain.exponentialRampToValueAtTime(0.9 * vol * (0.3 + 0.55 * Math.random()), t + (len * i) / 4.4);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+    s.connect(lp).connect(g).connect(this.sfxBus);
+    s.start(t, Math.random() * 1.5);
+    s.stop(t + len + 0.1);
   }
 
   // --------------------------------------------------------------- one-shots

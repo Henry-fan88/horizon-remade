@@ -58,6 +58,8 @@ function prepare(root) {
         material.emissive.set(0xffffff); material.emissiveMap = source.map; material.emissiveIntensity = .35;
       }
       material.name = `traffic:${root.name}:${role}`;
+      // no world-space puddles or snow on cars (src/world/weather-surface.js)
+      material.defines = { ...material.defines, NO_WEATHER: '' };
       materials.set(source, material);
     }
     const geometry = mesh.geometry.index ? mesh.geometry.toNonIndexed() : mesh.geometry.clone();

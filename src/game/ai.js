@@ -1,7 +1,7 @@
 // AI race driver: pure-pursuit steering on the racing line + speed-profile throttle/brake.
 import { clamp, lerp, wrapAngle } from '../core/math.js';
 import { SURF } from '../world/worldgen.js';
-import { SURFACE_INFO, tireSurfaceGrip } from '../world/surfaces.js';
+import { SURFACE_INFO, tireSurfaceGrip, weatherGrip } from '../world/surfaces.js';
 
 // Let opponents brake before the snow line and respect the same
 // cornering budget as the player's tyres. Entirely dry route profiles stay exact.
@@ -91,6 +91,10 @@ export class AIDriver {
     // target speed (looked up a bit ahead so braking happens in time)
     const iAhead = route.idx(pr.i + Math.round(4 + speed * 0.12));
     let target = Math.min(this.profile[pr.i], this.profile[iAhead]) * this.rubber;
+    // in the wet the whole speed profile scales with the square root of the grip left, which
+    // also scales every braking distance in it consistently (v² / 2a with a scaled by grip)
+    const surf = SURFACE_INFO[this.v.physics.wheels[0].surface] || SURFACE_INFO[SURF.ROAD];
+    target *= Math.sqrt(weatherGrip(surf, 30));
     // traffic awareness: slow down / change lane behind a slower car
     let blocked = false;
     if (ctx && ctx.others) {
