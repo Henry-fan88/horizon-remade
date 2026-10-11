@@ -2,7 +2,8 @@
   "name": "horizon-remade",
   "private": true,
   "version": "1.0.0",
-  "description": "Open-world festival racing game for the web (Forza Horizon-inspired fan remake)",
+  "description": "An open-world browser driving sandbox with racing, procedural environments, weather and multiplayer",
+  "license": "MIT",
   "type": "module",
   "scripts": {
     "dev": "vite",
